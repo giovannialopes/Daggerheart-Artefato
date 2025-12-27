@@ -1,6 +1,6 @@
 {
   "name": "daggerheart-artefact",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Daggerheart - Artefact - Módulo para criar e gerenciar Árvores de Talentos personalizadas com domínios customizados para jogadores de Daggerheart",
   "main": "scripts/main.js",
   "keywords": [
@@ -9,6 +9,6 @@
     "module",
     "talent-tree"
   ],
-  "author": "Seu Nome",
+  "author": "Adags",
   "license": "MIT"
 }
