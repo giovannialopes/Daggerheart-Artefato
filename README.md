@@ -1,4 +1,4 @@
-# Daggerheart Talent Tree
+# Daggerheart - Artefact
 
 Um módulo para Foundry VTT que permite criar e gerenciar Árvores de Talentos personalizadas para jogadores de Daggerheart.
 

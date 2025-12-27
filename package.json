@@ -1,7 +1,7 @@
 {
-  "name": "daggerheart-talent-tree",
+  "name": "daggerheart-artefact",
   "version": "1.0.0",
-  "description": "Um módulo para criar e gerenciar Árvores de Talentos personalizadas com domínios customizados para jogadores de Daggerheart",
+  "description": "Daggerheart - Artefact - Módulo para criar e gerenciar Árvores de Talentos personalizadas com domínios customizados para jogadores de Daggerheart",
   "main": "scripts/main.js",
   "keywords": [
     "foundryvtt",
