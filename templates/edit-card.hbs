@@ -1,0 +1,41 @@
+<div class="edit-card-container">
+  <form class="edit-card-form">
+    <!-- Zona de arrastar carta -->
+    <div class="card-drop-zone">
+      <img id="card-image-preview" src="{{cardData.img}}" alt="{{cardData.name}}" />
+    </div>
+
+    <div class="form-group">
+      <label for="card-name">{{i18n.cardName}}:</label>
+      <input type="text" id="card-name" name="name" value="{{cardData.name}}" placeholder="Nome da Carta" required />
+    </div>
+    
+    <div class="form-group">
+      <label for="card-image-url">{{i18n.cardImage}}:</label>
+      <div class="image-url-input-group">
+        <input type="text" id="card-image-url" name="img" value="{{cardData.img}}" placeholder="https://exemplo.com/imagem.png ou caminho local (ex: systems/daggerheart/...)" />
+        <button type="button" class="browse-image-button" title="{{i18n.browseImage}}">
+          <i class="fas fa-folder-open"></i>
+        </button>
+        <button type="button" class="load-image-button" title="{{i18n.loadImage}}">
+          <i class="fas fa-download"></i>
+        </button>
+      </div>
+    </div>
+    
+    <div class="form-group">
+      <label for="card-description">{{i18n.cardDescription}}:</label>
+      <textarea id="card-description" name="description" rows="6" placeholder="Descrição da carta...">{{cardData.description}}</textarea>
+    </div>
+    
+    <div class="form-actions">
+      <button type="button" class="cancel-card-button">
+        <i class="fas fa-times"></i> {{i18n.cancel}}
+      </button>
+            <button type="submit" class="save-card-button">
+              <i class="fas fa-save"></i> {{i18n.save}}
+            </button>
+    </div>
+  </form>
+</div>
+

@@ -1,0 +1,51 @@
+<div class="select-card-container">
+  <div class="select-card-header">
+    <h3>{{i18n.selectCard}}</h3>
+    <p class="select-card-help">{{i18n.selectCardHelp}}</p>
+  </div>
+
+  {{#if domainCards.length}}
+    <div class="domain-card-list">
+      {{#each domainCards as |card|}}
+        <div class="domain-card-item {{#if card.isSelected}}selected{{/if}}" data-card-uuid="{{card.uuid}}">
+          <img src="{{card.img}}" alt="{{card.name}}" class="card-image" />
+          <div class="card-info">
+            <div class="card-name">{{card.name}}</div>
+            {{#if card.isSelected}}
+              <div class="card-status">{{i18n.alreadyAssociated}}</div>
+            {{else}}
+              <div class="card-action">{{i18n.clickToAssociate}}</div>
+            {{/if}}
+          </div>
+        </div>
+      {{/each}}
+    </div>
+
+    {{#if node.domainCardUuid}}
+      <div class="card-actions">
+        <button type="button" class="remove-card-button">
+          <i class="fas fa-times"></i> {{i18n.removeCard}}
+        </button>
+      </div>
+    {{/if}}
+  {{else}}
+    <div class="no-cards-message">
+      <i class="fas fa-info-circle"></i>
+      <p>{{i18n.noCards}}</p>
+      {{#if isGM}}
+      <button type="button" class="create-card-button">
+        <i class="fas fa-plus"></i> {{i18n.createCard}}
+      </button>
+      {{/if}}
+    </div>
+  {{/if}}
+
+  <div class="form-actions">
+    {{#if isGM}}
+    <button type="button" class="edit-node-button">
+      <i class="fas fa-edit"></i> {{i18n.editNode}}
+    </button>
+    {{/if}}
+  </div>
+</div>
+

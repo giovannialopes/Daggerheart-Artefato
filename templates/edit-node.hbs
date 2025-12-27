@@ -1,0 +1,29 @@
+<div class="edit-node-container">
+  <form class="edit-node-form">
+    <div class="form-group">
+      <label for="node-label">{{i18n.nodeName}}:</label>
+      <input type="text" id="node-label" name="label" value="{{node.label}}" placeholder="Nome do Nó" />
+    </div>
+    
+    <div class="form-group">
+      <label for="node-icon">{{i18n.nodeIcon}}:</label>
+      <input type="text" id="node-icon" name="icon" value="{{node.icon}}" placeholder="fas fa-star ou URL da imagem" />
+      <small class="form-help">{{i18n.iconHelp}}</small>
+    </div>
+    
+    <div class="form-group">
+      <label for="node-description">{{i18n.nodeDescription}}:</label>
+      <textarea id="node-description" name="description" rows="6" placeholder="Descrição do nó...">{{node.description}}</textarea>
+    </div>
+    
+    <div class="form-actions">
+      <button type="button" class="cancel-node-button">
+        <i class="fas fa-times"></i> {{i18n.cancel}}
+      </button>
+      <button type="submit" class="save-node-button">
+        <i class="fas fa-save"></i> {{i18n.save}}
+      </button>
+    </div>
+  </form>
+</div>
+

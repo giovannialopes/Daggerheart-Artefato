@@ -1,0 +1,48 @@
+{
+  "id": "daggerheart-talent-tree",
+  "title": "Daggerheart Talent Tree",
+  "description": "Um módulo para criar e gerenciar Árvores de Talentos personalizadas com domínios customizados para jogadores de Daggerheart",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13",
+    "maximum": ""
+  },
+  "authors": [
+    {
+      "name": "Seu Nome"
+    }
+  ],
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "styles": [
+    "styles/talent-tree.css"
+  ],
+  "relationships": {
+    "systems": [
+      {
+        "id": "daggerheart",
+        "type": "system",
+        "compatibility": {
+          "minimum": "1.2.0"
+        }
+      }
+    ]
+  },
+  "languages": [
+    {
+      "lang": "pt-BR",
+      "name": "Português (Brasil)",
+      "path": "lang/pt-BR.json"
+    },
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    }
+  ],
+  "url": "",
+  "manifest": "",
+  "download": ""
+}

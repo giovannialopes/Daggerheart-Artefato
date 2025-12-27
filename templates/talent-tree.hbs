@@ -1,0 +1,101 @@
+<div class="talent-tree-container">
+  <header class="talent-tree-header">
+      <h2>
+      <i class="fas fa-sitemap"></i>
+      {{i18n.title}} - {{actorName}}
+    </h2>
+    <div class="header-controls">
+      <div class="level-control">
+        <label>{{i18n.level}}:</label>
+        <div class="level-counter">
+          {{#if isGM}}
+          <button class="level-button decrease-level" type="button" title="{{i18n.decreaseLevel}}">
+            <i class="fas fa-minus"></i>
+          </button>
+          {{/if}}
+          <span class="level-display">{{talentTree.currentLevel}}/{{talentTree.maxLevel}}</span>
+          {{#if isGM}}
+          <button class="level-button increase-level" type="button" title="{{i18n.increaseLevel}}">
+            <i class="fas fa-plus"></i>
+          </button>
+          {{/if}}
+        </div>
+      </div>
+      {{#if isGM}}
+      <div class="gm-controls">
+        <select id="domain-select">
+          <option value="">-- {{i18n.selectDomain}} --</option>
+          {{#each allDomains as |domain id|}}
+          <option value="{{id}}">{{localize domain.label}}</option>
+          {{/each}}
+        </select>
+        <button class="add-domain-button" type="button">
+          <i class="fas fa-plus"></i> {{i18n.addDomain}}
+        </button>
+      </div>
+      {{/if}}
+    </div>
+  </header>
+
+  <div class="talent-tree-content">
+    {{#if talentTree.domains.length}}
+      {{#each talentTree.domains as |domain|}}
+      <div class="domain-section" data-domain-id="{{domain.id}}">
+        <div class="domain-header">
+          <img src="{{domain.src}}" class="domain-icon" alt="{{domain.label}}" />
+          <h3>{{localize domain.label}}</h3>
+          {{#if ../isGM}}
+          <button class="remove-domain-button" data-domain-id="{{domain.id}}" type="button" title="{{@root.i18n.removeDomain}}">
+            <i class="fas fa-times"></i>
+          </button>
+          {{/if}}
+        </div>
+        <div class="domain-nodes">
+          {{#if domain.nodes.length}}
+            <div class="talent-tree-visual">
+              {{#each domain.nodes as |node|}}
+              <div class="talent-node-wrapper" data-node-id="{{node.id}}" style="grid-column: {{node.x}}; grid-row: {{node.y}};">
+                <div class="talent-node {{#if (includes @root.talentTree.unlockedNodes node.id)}}unlocked{{/if}} {{#if (includes @root.talentTree.availableNodes node.id)}}available{{/if}}" 
+                     data-node-id="{{node.id}}"
+                     title="{{node.label}}{{#if node.description}} - {{node.description}}{{/if}}">
+                  <div class="node-content">
+                    {{#if node.icon}}
+                      {{#if node.isImage}}
+                      <img src="{{node.icon}}" alt="{{node.label}}" class="node-image" />
+                      {{else}}
+                      <i class="{{node.icon}}"></i>
+                      {{/if}}
+                    {{else}}
+                    <i class="fas fa-circle"></i>
+                    {{/if}}
+                    <span class="node-label">{{node.label}}</span>
+                  </div>
+                </div>
+              </div>
+              {{/each}}
+              
+              <!-- Linhas de conexão SVG - será desenhado via JavaScript -->
+              <svg class="talent-connections-overlay" data-domain-id="{{domain.id}}"></svg>
+            </div>
+          {{else}}
+          <p class="no-nodes">{{@root.i18n.noNodes}}</p>
+          {{#if ../isGM}}
+          <button class="create-tree-button" data-domain-id="{{domain.id}}" type="button">
+            <i class="fas fa-sitemap"></i> Criar Árvore de Talentos
+          </button>
+          {{/if}}
+          {{/if}}
+        </div>
+      </div>
+      {{/each}}
+    {{else}}
+    <div class="empty-state">
+      <i class="fas fa-sitemap"></i>
+      <p>{{i18n.noDomains}}</p>
+      {{#if isGM}}
+      <p>{{i18n.selectDomain}} {{i18n.addDomain}} para começar.</p>
+      {{/if}}
+    </div>
+    {{/if}}
+  </div>
+</div>
