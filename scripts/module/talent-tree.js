@@ -10,7 +10,6 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     tag: "div",
     window: {
       title: "Árvore de Talentos",
-      icon: "fas fa-sitemap",
       resizable: true,
       minimizable: true,
     },

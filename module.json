@@ -2,7 +2,7 @@
   "id": "daggerheart-talent-tree",
   "title": "Daggerheart - Artefact",
   "description": "Um módulo para criar e gerenciar Árvores de Talentos personalizadas com domínios customizados para jogadores de Daggerheart",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "compatibility": {
     "minimum": "13",
     "verified": "13",

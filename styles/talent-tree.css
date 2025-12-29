@@ -1,13 +1,13 @@
 /* Daggerheart Talent Tree Styles */
 
-/* Botão na sheet do personagem - estilo como rail-btn do Daggerheart Plus */
+/* Botão na sheet do personagem - estilo idêntico aos outros botões do rail */
 .talent-tree-button.rail-btn {
   width: 35px;
   height: 45px;
   border: none;
   border-radius: var(--dh-radius-lg, 8px);
-  background: var(--dhp-surface, #1a1a25);
-  color: var(--dh-color-gold, #f3c267);
+  background: var(--dhp-surface);
+  color: #F3C267;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -19,9 +19,14 @@
 }
 
 .talent-tree-button.rail-btn:hover {
-  background: var(--dhp-border, #333344);
+  background: var(--dhp-border) !important;
   color: var(--dh-color-gold-light, #fef790);
   transform: scale(1.05);
+}
+
+.talent-tree-button.rail-btn.active {
+  box-shadow: 0 0 0 2px rgba(243, 194, 103, 0.65),
+    0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .talent-tree-button.rail-btn i {
@@ -29,6 +34,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  color: #F3C267 !important;
+}
+
+.talent-tree-button.rail-btn:hover i {
+  color: var(--dh-color-gold-light, #fef790) !important;
 }
 
 .talent-tree-button.rail-btn .sr-only {

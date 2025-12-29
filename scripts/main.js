@@ -32,7 +32,7 @@ function registerTalentTreeHooks() {
     
     const talentTreeButton = $(`
       <button class="talent-tree-button rail-btn" type="button" data-tooltip="${buttonTitle}" data-tooltip-direction="UP">
-        <i class="fas fa-sitemap"></i>
+        <i class="fas fa-tree"></i>
         <span class="sr-only">${buttonTitle}</span>
       </button>
     `);
@@ -42,8 +42,27 @@ function registerTalentTreeHooks() {
             TalentTreeApplication.openForActor(actor);
           });
 
-          // Tentar adicionar na área de navegação (tab-navigation)
-          // Primeiro, procurar pelo container de navegação
+          // Procurar especificamente pelo rail (barra lateral) onde ficam os botões de navegação
+          // Primeiro, tentar encontrar o rail do Daggerheart Plus
+          const rightRail = html.find(".floating-rail-right, .floating-rail.floating-rail-right");
+          const railButtons = rightRail.find(".rail-buttons, nav");
+          
+          if (railButtons.length) {
+            // Encontrar o botão de configurações no rail
+            const settingsButton = railButtons.find('[data-action="openSettings"], .rail-btn-settings');
+            
+            if (settingsButton.length) {
+              // Adicionar antes do botão de configurações
+              talentTreeButton.insertBefore(settingsButton);
+              return; // Sucesso, sair da função
+            } else {
+              // Se não encontrar o botão de configurações, adicionar no final do rail
+              railButtons.append(talentTreeButton);
+              return; // Sucesso, sair da função
+            }
+          }
+          
+          // Fallback: procurar pelo container de navegação tradicional
           const navigationContainer = html.find(".tab-navigation .navigation-container");
           
           if (navigationContainer.length) {
@@ -51,31 +70,13 @@ function registerTalentTreeHooks() {
             
             if (settingsButton.length) {
               talentTreeButton.insertBefore(settingsButton);
-            } else {
-              navigationContainer.append(talentTreeButton);
-            }
-          } else {
-            // Tentar encontrar a área onde fica o botão de configurações
-            const settingsButton = html.find('[data-action="openSettings"]');
-            
-            if (settingsButton.length) {
-              talentTreeButton.insertBefore(settingsButton);
-            } else {
-              // Fallback: adicionar na área de tabs
-              const sheetTabs = html.find(".sheet-tabs");
-              
-              if (sheetTabs.length) {
-                sheetTabs.after(talentTreeButton);
-              } else {
-                // Último fallback: adicionar no header
-                const header = html.find(".sheet-header, header");
-                
-                if (header.length) {
-                  header.append(talentTreeButton);
-                }
-              }
+              return; // Sucesso, sair da função
             }
           }
+          
+          // Se não encontrou nenhum lugar apropriado, não adicionar o botão
+          // (evita adicionar em lugares indesejados)
+          console.warn(`[${MODULE_ID}] Não foi possível encontrar o rail para adicionar o botão da árvore de talentos`);
   };
 
   // Hook para ApplicationV2 (usado pelo Daggerheart Plus)

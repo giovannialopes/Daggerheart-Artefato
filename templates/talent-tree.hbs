@@ -75,7 +75,7 @@
           <p class="no-nodes">{{@root.i18n.noNodes}}</p>
           {{#if ../isGM}}
           <button class="create-tree-button" data-domain-id="{{domain.id}}" type="button">
-            <i class="fas fa-sitemap"></i> Criar Árvore de Talentos
+            Criar Árvore de Talentos
           </button>
           {{/if}}
           {{/if}}
@@ -84,7 +84,6 @@
       {{/each}}
     {{else}}
     <div class="empty-state">
-      <i class="fas fa-sitemap"></i>
       <p>{{i18n.noDomains}}</p>
       {{#if isGM}}
       <p>Clique em "{{i18n.addDomain}}" para adicionar um domínio à árvore de talentos.</p>
