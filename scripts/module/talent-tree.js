@@ -890,6 +890,23 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       existingMenu.remove();
     }
 
+    // Recarregar os dados do nó para garantir que temos os dados mais recentes
+    const talentTreeData = this.getTalentTreeData();
+    const currentDomain = talentTreeData.domains.find(d => d.id === domainId);
+    if (currentDomain) {
+      const currentNode = currentDomain.nodes.find(n => n.id === node.id);
+      if (currentNode) {
+        // Usar o nó atualizado em vez do nó passado como parâmetro
+        node = currentNode;
+        console.log(`[${MODULE_ID}] _showNodeContextMenu - Nó recarregado:`, {
+          id: node.id,
+          label: node.label,
+          domainCardUuid: node.domainCardUuid,
+          hasCard: !!node.domainCardUuid
+        });
+      }
+    }
+
     // Criar menu de contexto HTML
     const menu = document.createElement("div");
     menu.className = `${MODULE_ID}-node-context-menu`;
@@ -931,7 +948,19 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     menu.appendChild(viewOption);
 
     // Opção 2: Criar/Editar Carta
-    const hasCard = !!node.domainCardUuid;
+    // Verificar se tem carta salva:
+    // - Se tem domainCardUuid, a carta foi criada no personagem
+    // - Se tem domainCardData ou domainCardName, a carta foi salva no nó (mas não criada ainda)
+    const hasCard = !!(node.domainCardUuid || node.domainCardData || node.domainCardName);
+    
+    console.log(`[${MODULE_ID}] _showNodeContextMenu - Verificação de carta:`, {
+      nodeId: node.id,
+      hasDomainCardUuid: !!node.domainCardUuid,
+      hasDomainCardData: !!node.domainCardData,
+      hasDomainCardName: !!node.domainCardName,
+      hasCard: hasCard
+    });
+    
     const cardOption = document.createElement("div");
     cardOption.className = "context-menu-item";
     cardOption.style.cssText = `
@@ -942,8 +971,8 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       align-items: center;
       gap: 8px;
     `;
-    // Mostrar "Editar Carta" se já existe carta, senão "Criar Carta"
-    const cardOptionText = hasCard 
+    // Mostrar "Editar Carta" se já existe carta salva (domainCardUuid, domainCardData ou domainCardName), senão "Criar Carta"
+    const cardOptionText = hasCard
       ? game.i18n.localize(`${MODULE_ID}.talent-tree.edit-card`)
       : game.i18n.localize(`${MODULE_ID}.talent-tree.create-card`);
     const cardOptionIcon = hasCard ? "fas fa-edit" : "fas fa-plus";
@@ -1081,6 +1110,8 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
   async _onEditCard(node, domainId) {
     // Verificar se já existe uma carta associada a este nó
     let cardData = null;
+    
+    // PRIORIDADE 1: Se tem domainCardUuid, tentar carregar a carta do personagem
     if (node.domainCardUuid) {
       try {
         const item = await foundry.utils.fromUuid(node.domainCardUuid);
@@ -1090,14 +1121,56 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
         } else {
           // Carta não existe mais, limpar referência
           const talentTreeData = this.getTalentTreeData();
-          delete node.domainCardUuid;
-          await this.saveTalentTreeData(talentTreeData);
+          const domain = talentTreeData.domains.find(d => d.id === domainId);
+          if (domain) {
+            const nodeToUpdate = domain.nodes.find(n => n.id === node.id);
+            if (nodeToUpdate) {
+              delete nodeToUpdate.domainCardUuid;
+              await this.saveTalentTreeData(talentTreeData);
+            }
+          }
         }
       } catch (error) {
         // Carta não existe mais, limpar referência
         const talentTreeData = this.getTalentTreeData();
-        delete node.domainCardUuid;
-        await this.saveTalentTreeData(talentTreeData);
+        const domain = talentTreeData.domains.find(d => d.id === domainId);
+        if (domain) {
+          const nodeToUpdate = domain.nodes.find(n => n.id === node.id);
+          if (nodeToUpdate) {
+            delete nodeToUpdate.domainCardUuid;
+            await this.saveTalentTreeData(talentTreeData);
+          }
+        }
+      }
+    }
+    
+    // PRIORIDADE 2: Se não tem carta no personagem mas tem domainCardData, usar os dados salvos no nó
+    if (!cardData && node.domainCardData) {
+      // Criar um objeto temporário com os dados salvos para edição
+      cardData = {
+        name: node.domainCardName || node.label,
+        img: node.domainCardImg || node.icon,
+        system: foundry.utils.deepClone(node.domainCardData.system || {}),
+        type: "domainCard"
+      };
+      // Garantir que a descrição esteja correta
+      if (node.domainCardDescription) {
+        if (cardData.system.description && typeof cardData.system.description === "object") {
+          cardData.system.description.value = node.domainCardDescription;
+        } else {
+          cardData.system.description = node.domainCardDescription;
+        }
+      }
+      // IMPORTANTE: Garantir que as actions do domainCardData sejam preservadas
+      if (node.domainCardData.system?.actions) {
+        if (!cardData.system.actions) {
+          cardData.system.actions = {};
+        }
+        // Mesclar as actions do domainCardData
+        if (typeof node.domainCardData.system.actions === 'object') {
+          Object.assign(cardData.system.actions, foundry.utils.deepClone(node.domainCardData.system.actions));
+        }
+        console.log(`[${MODULE_ID}] _onEditCard - Actions carregadas do domainCardData:`, Object.keys(cardData.system.actions || {}).length);
       }
     }
 

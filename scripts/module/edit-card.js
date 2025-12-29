@@ -138,8 +138,19 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
 
     // Preparar lista de actions para exibição
     let actionsList = [];
-    if (this.currentItem?.system?.actions) {
-      // Se temos um item existente, usar suas actions
+    
+    // PRIORIDADE 1: Se temos actions em cardData.system.actions (adicionadas durante edição), usar elas
+    if (this.cardData?.system?.actions && Object.keys(this.cardData.system.actions).length > 0) {
+      actionsList = Object.values(this.cardData.system.actions).map(action => ({
+        id: action._id || action.id || foundry.utils.randomID(),
+        name: action.name || "Action",
+        img: action.img || "icons/svg/downgrade.svg",
+        disabled: action.disabled || false,
+      }));
+      console.log(`[${MODULE_ID}] _prepareContext - Actions do cardData:`, Object.keys(this.cardData.system.actions).length);
+    }
+    // PRIORIDADE 2: Se temos um item existente, usar suas actions
+    else if (this.currentItem?.system?.actions) {
       if (this.currentItem.system.actions instanceof foundry.utils.Collection) {
         actionsList = Array.from(this.currentItem.system.actions.values()).map(action => ({
           id: action.id,
@@ -156,8 +167,9 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
           disabled: action.disabled || false,
         }));
       }
-    } else if (this.baseActions) {
-      // Se não temos item mas temos actions preservadas, usar elas
+    } 
+    // PRIORIDADE 3: Se não temos item mas temos actions preservadas, usar elas
+    else if (this.baseActions) {
       actionsList = Object.values(this.baseActions).map(action => ({
         id: action._id || action.id || foundry.utils.randomID(),
         name: action.name || "Action",
@@ -521,6 +533,33 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
           let actionItem = null;
           try {
             actionItem = action.item;
+            
+            // Verificar se o item está em um compendium bloqueado
+            if (actionItem?.pack) {
+              const compendium = game.packs.get(actionItem.pack);
+              if (compendium?.locked) {
+                ui.notifications.warn(
+                  game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-compendium-locked`) || 
+                  "Não é possível editar actions de itens em compendiums bloqueados. Por favor, salve a carta no personagem primeiro."
+                );
+                return;
+              }
+            }
+            
+            // Verificar se o item está em um compendium (mesmo que não bloqueado)
+            if (actionItem?.pack || actionItem?.uuid?.startsWith('Compendium.')) {
+              // Verificar se o item já está no personagem
+              if (!this.actor.items.has(actionItem.id)) {
+                ui.notifications.warn(
+                  game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-compendium`) || 
+                  "Por favor, salve a carta no personagem primeiro antes de editar as actions."
+                );
+                return;
+              }
+              // Se está no personagem, usar o item do personagem em vez do compendium
+              actionItem = this.actor.items.get(actionItem.id);
+            }
+            
             if (!actionItem || actionItem !== this.currentItem) {
               // Tentar acessar a action através do item para garantir que está vinculada
               const itemActions = this.currentItem.system.actions;
@@ -538,6 +577,17 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
               // Verificar novamente se agora tem item
               if (action.parent?.parent) {
                 actionItem = action.item;
+                // Verificar novamente se é de compendium
+                if (actionItem?.pack || actionItem?.uuid?.startsWith('Compendium.')) {
+                  if (!this.actor.items.has(actionItem.id)) {
+                    ui.notifications.warn(
+                      game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-compendium`) || 
+                      "Por favor, salve a carta no personagem primeiro antes de editar as actions."
+                    );
+                    return;
+                  }
+                  actionItem = this.actor.items.get(actionItem.id);
+                }
               }
             }
           } catch (e) {
@@ -592,6 +642,75 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       }
     }
     
+    // Se não temos currentItem mas temos cardData, tentar editar dos dados temporários
+    if (!this.currentItem && this.cardData?.system?.actions) {
+      // Encontrar a action nos dados temporários
+      let actionData = null;
+      for (const [key, a] of Object.entries(this.cardData.system.actions)) {
+        const id = a._id || a.id || key;
+        if (id === actionId) {
+          actionData = a;
+          break;
+        }
+      }
+
+      if (actionData) {
+        // Tentar criar uma action temporária para edição
+        try {
+          const ActionClass = game.system.api?.models?.actions?.actionsTypes[actionData.type] || 
+                             game.system.api?.models?.actions?.actionsTypes?.base;
+          
+          if (!ActionClass) {
+            ui.notifications.warn(
+              "Não é possível editar esta action. Por favor, salve a carta primeiro."
+            );
+            return;
+          }
+
+          // Criar um objeto temporário que simula um item para a action
+          const tempItem = {
+            system: this.cardData.system,
+            update: async (data) => {
+              // Atualizar os dados quando a action for editada
+              if (data.system?.actions) {
+                Object.assign(this.cardData.system.actions, data.system.actions);
+                // Atualizar também no node.domainCardData se existir
+                if (this.node?.domainCardData) {
+                  if (!this.node.domainCardData.system) {
+                    this.node.domainCardData.system = {};
+                  }
+                  if (!this.node.domainCardData.system.actions) {
+                    this.node.domainCardData.system.actions = {};
+                  }
+                  Object.assign(this.node.domainCardData.system.actions, data.system.actions);
+                }
+              }
+              await this.render();
+            }
+          };
+          
+          // Criar uma action temporária com parent simulado
+          const actionInstance = new ActionClass(actionData, { 
+            parent: { parent: tempItem } 
+          });
+          
+          // Tentar abrir o ActionConfig
+          const ActionConfig = game.system.api?.applications?.sheetsConfigs?.ActionConfig;
+          if (ActionConfig) {
+            const config = new ActionConfig(actionInstance);
+            config.render(true);
+            return;
+          }
+        } catch (error) {
+          console.error(`[${MODULE_ID}] Erro ao editar action temporária:`, error);
+          ui.notifications.warn(
+            "Não é possível editar esta action. Por favor, salve a carta primeiro."
+          );
+          return;
+        }
+      }
+    }
+    
     // Se não temos item ainda, mas temos action preservada, avisar que precisa salvar primeiro
     if (this.baseActions) {
       const actionData = Object.values(this.baseActions).find(a => {
@@ -616,8 +735,40 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
   async _onCreateAction() {
     console.log(`[${MODULE_ID}] _onCreateAction - Iniciando criação de action`);
     
-    // Verificar se temos um item existente
-    if (!this.currentItem) {
+    // Se temos currentItem, criar action normalmente
+    if (this.currentItem) {
+      try {
+        // Usar o método Action.create do sistema Daggerheart
+        const ActionClass = game.system.api?.models?.actions?.actionsTypes?.base;
+        if (!ActionClass) {
+          ui.notifications.error("Não foi possível encontrar a classe de Action do sistema.");
+          return;
+        }
+
+        // O parent deve ser o system do item (this.currentItem.system)
+        const newAction = await ActionClass.create({}, {
+          parent: this.currentItem.system,
+          renderSheet: true
+        });
+
+        if (newAction) {
+          console.log(`[${MODULE_ID}] _onCreateAction - Action criada:`, newAction.id);
+          // Recarregar a lista de actions atualizando o formulário
+          await this.render();
+          ui.notifications.info(
+            game.i18n.format(`${MODULE_ID}.edit-card.action-created`, { name: newAction.name }) ||
+            `Action "${newAction.name}" criada com sucesso!`
+          );
+        }
+      } catch (error) {
+        console.error(`[${MODULE_ID}] Erro ao criar action:`, error);
+        ui.notifications.error(`Erro ao criar action: ${error.message}`);
+      }
+      return;
+    }
+
+    // Se não temos currentItem, criar action temporariamente nos dados do cardData
+    if (!this.cardData) {
       ui.notifications.warn(
         game.i18n.localize(`${MODULE_ID}.edit-card.action-create-after-save`) || 
         "Por favor, salve a carta primeiro antes de criar actions."
@@ -625,29 +776,93 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       return;
     }
 
+    // Garantir que cardData.system existe
+    if (!this.cardData.system) {
+      this.cardData.system = {};
+    }
+    if (!this.cardData.system.actions) {
+      this.cardData.system.actions = {};
+    }
+
     try {
-      // Usar o método Action.create do sistema Daggerheart
-      const ActionClass = game.system.api?.models?.actions?.actionsTypes?.base;
+      // Primeiro, pedir ao usuário para selecionar o tipo de action
+      const actionTypeResult = await foundry.applications.api.DialogV2.input({
+        window: { title: game.i18n.localize('DAGGERHEART.CONFIG.SelectAction.selectType') },
+        position: { width: 300 },
+        classes: ['daggerheart', 'dh-style'],
+        content: await foundry.applications.handlebars.renderTemplate(
+          'systems/daggerheart/templates/actionTypes/actionType.hbs',
+          {
+            types: CONFIG.DH.ACTIONS.actionTypes,
+            itemName: this.cardData.name || "Carta"
+          }
+        ),
+        ok: {
+          label: game.i18n.format('DOCUMENT.Create', {
+            type: game.i18n.localize('DAGGERHEART.GENERAL.Action.single')
+          })
+        }
+      });
+
+      if (!actionTypeResult || !actionTypeResult.type) {
+        return; // Usuário cancelou
+      }
+
+      const ActionClass = game.system.api?.models?.actions?.actionsTypes[actionTypeResult.type];
       if (!ActionClass) {
-        ui.notifications.error("Não foi possível encontrar a classe de Action do sistema.");
+        ui.notifications.error("Tipo de action não encontrado.");
         return;
       }
 
-      // O parent deve ser o system do item (this.currentItem.system)
-      const newAction = await ActionClass.create({}, {
-        parent: this.currentItem.system,
-        renderSheet: true
-      });
-
-      if (newAction) {
-        console.log(`[${MODULE_ID}] _onCreateAction - Action criada:`, newAction.id);
-        // Recarregar a lista de actions atualizando o formulário
-        await this.render();
-        ui.notifications.info(
-          game.i18n.format(`${MODULE_ID}.edit-card.action-created`, { name: newAction.name }) ||
-          `Action "${newAction.name}" criada com sucesso!`
-        );
+      // Criar uma action temporária com estrutura básica
+      const actionId = foundry.utils.randomID();
+      
+      // Obter configuração padrão (pode não ter parent, então usar valores padrão)
+      let sourceConfig = {};
+      try {
+        if (ActionClass.getSourceConfig) {
+          // Tentar obter config padrão, mas pode falhar sem parent
+          sourceConfig = ActionClass.getSourceConfig(null) || {};
+        }
+      } catch (e) {
+        // Se falhar, usar estrutura básica
+        sourceConfig = {
+          type: actionTypeResult.type,
+          name: game.i18n.localize(CONFIG.DH.ACTIONS.actionTypes[actionTypeResult.type]?.name) || "Action"
+        };
       }
+
+      // Criar objeto de action básico
+      const actionData = {
+        _id: actionId,
+        type: actionTypeResult.type,
+        name: sourceConfig.name || game.i18n.localize(CONFIG.DH.ACTIONS.actionTypes[actionTypeResult.type]?.name) || "Action",
+        ...sourceConfig
+      };
+      
+      // Adicionar aos dados do cardData
+      this.cardData.system.actions[actionId] = actionData;
+      
+      // Se temos node.domainCardData, atualizar também
+      if (this.node?.domainCardData) {
+        if (!this.node.domainCardData.system) {
+          this.node.domainCardData.system = {};
+        }
+        if (!this.node.domainCardData.system.actions) {
+          this.node.domainCardData.system.actions = {};
+        }
+        this.node.domainCardData.system.actions[actionId] = foundry.utils.deepClone(actionData);
+      }
+
+      console.log(`[${MODULE_ID}] _onCreateAction - Action criada temporariamente:`, actionId);
+      
+      // Recarregar a lista de actions atualizando o formulário
+      await this.render();
+      
+      ui.notifications.info(
+        game.i18n.format(`${MODULE_ID}.edit-card.action-created`, { name: actionData.name }) ||
+        `Action "${actionData.name}" criada com sucesso!`
+      );
     } catch (error) {
       console.error(`[${MODULE_ID}] Erro ao criar action:`, error);
       ui.notifications.error(`Erro ao criar action: ${error.message}`);
@@ -657,8 +872,68 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
   async _onDeleteAction(actionId) {
     console.log(`[${MODULE_ID}] _onDeleteAction - actionId:`, actionId);
     
-    // Verificar se temos um item existente
-    if (!this.currentItem) {
+    // Se temos currentItem, deletar normalmente
+    if (this.currentItem) {
+      try {
+        // Encontrar a action
+        let action = null;
+        if (this.currentItem.system.actions instanceof foundry.utils.Collection) {
+          action = this.currentItem.system.actions.get(actionId);
+        } else if (typeof this.currentItem.system.actions === 'object' && this.currentItem.system.actions !== null) {
+          for (const [key, a] of Object.entries(this.currentItem.system.actions)) {
+            const id = a._id || a.id || key;
+            if (id === actionId) {
+              action = a;
+              break;
+            }
+          }
+        }
+
+        if (!action) {
+          ui.notifications.warn(`Action não encontrada com id: ${actionId}`);
+          return;
+        }
+
+        // Confirmar deleção
+        const actionName = action.name || "Action";
+        const confirmed = await foundry.applications.api.DialogV2.confirm({
+          window: {
+            title: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.title', {
+              type: game.i18n.localize(`DAGGERHEART.GENERAL.Action.single`),
+              name: actionName
+            }) || `Deletar Action`,
+            content: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.text', {
+              name: actionName
+            }) || `Tem certeza que deseja deletar "${actionName}"?`
+          }
+        });
+
+        if (!confirmed) {
+          console.log(`[${MODULE_ID}] _onDeleteAction - Deleção cancelada pelo usuário`);
+          return;
+        }
+
+        // Deletar a action usando o método delete()
+        await action.delete();
+        
+        console.log(`[${MODULE_ID}] _onDeleteAction - Action deletada:`, actionId);
+        
+        // Recarregar a lista de actions atualizando o formulário
+        await this.render();
+      
+        ui.notifications.info(
+          game.i18n.format(`${MODULE_ID}.edit-card.action-deleted`, { name: actionName }) ||
+          `Action "${actionName}" deletada com sucesso!`
+        );
+      } catch (error) {
+        console.error(`[${MODULE_ID}] Erro ao deletar action:`, error);
+        ui.notifications.error(`Erro ao deletar action: ${error.message}`);
+      }
+      return;
+    }
+
+    // Se não temos currentItem mas temos cardData, deletar dos dados temporários
+    if (!this.cardData) {
       ui.notifications.warn(
         game.i18n.localize(`${MODULE_ID}.edit-card.action-delete-after-save`) || 
         "Por favor, salve a carta primeiro antes de deletar actions."
@@ -666,61 +941,67 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       return;
     }
 
-    try {
-      // Encontrar a action
-      let action = null;
-      if (this.currentItem.system.actions instanceof foundry.utils.Collection) {
-        action = this.currentItem.system.actions.get(actionId);
-      } else if (typeof this.currentItem.system.actions === 'object' && this.currentItem.system.actions !== null) {
-        for (const [key, a] of Object.entries(this.currentItem.system.actions)) {
-          const id = a._id || a.id || key;
-          if (id === actionId) {
-            action = a;
-            break;
-          }
-        }
-      }
-
-      if (!action) {
-        ui.notifications.warn(`Action não encontrada com id: ${actionId}`);
-        return;
-      }
-
-      // Confirmar deleção
-      const actionName = action.name || "Action";
-      const confirmed = await foundry.applications.api.DialogV2.confirm({
-        window: {
-          title: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.title', {
-            type: game.i18n.localize(`DAGGERHEART.GENERAL.Action.single`),
-            name: actionName
-          }) || `Deletar Action`,
-          content: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.text', {
-            name: actionName
-          }) || `Tem certeza que deseja deletar "${actionName}"?`
-        }
-      });
-
-      if (!confirmed) {
-        console.log(`[${MODULE_ID}] _onDeleteAction - Deleção cancelada pelo usuário`);
-        return;
-      }
-
-      // Deletar a action usando o método delete()
-      await action.delete();
-      
-      console.log(`[${MODULE_ID}] _onDeleteAction - Action deletada:`, actionId);
-      
-      // Recarregar a lista de actions atualizando o formulário
-      await this.render();
-      
-      ui.notifications.info(
-        game.i18n.format(`${MODULE_ID}.edit-card.action-deleted`, { name: actionName }) ||
-        `Action "${actionName}" deletada com sucesso!`
-      );
-    } catch (error) {
-      console.error(`[${MODULE_ID}] Erro ao deletar action:`, error);
-      ui.notifications.error(`Erro ao deletar action: ${error.message}`);
+    // Garantir que cardData.system.actions existe
+    if (!this.cardData.system) {
+      this.cardData.system = {};
     }
+    if (!this.cardData.system.actions) {
+      this.cardData.system.actions = {};
+    }
+
+    // Encontrar a action nos dados temporários
+    let actionData = null;
+    let actionKey = null;
+    for (const [key, a] of Object.entries(this.cardData.system.actions)) {
+      const id = a._id || a.id || key;
+      if (id === actionId) {
+        actionData = a;
+        actionKey = key;
+        break;
+      }
+    }
+
+    if (!actionData) {
+      ui.notifications.warn(`Action não encontrada com id: ${actionId}`);
+      return;
+    }
+
+    // Confirmar deleção
+    const actionName = actionData.name || "Action";
+    const confirmed = await foundry.applications.api.DialogV2.confirm({
+      window: {
+        title: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.title', {
+          type: game.i18n.localize(`DAGGERHEART.GENERAL.Action.single`),
+          name: actionName
+        }) || `Deletar Action`,
+        content: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.text', {
+          name: actionName
+        }) || `Tem certeza que deseja deletar "${actionName}"?`
+      }
+    });
+
+    if (!confirmed) {
+      console.log(`[${MODULE_ID}] _onDeleteAction - Deleção cancelada pelo usuário`);
+      return;
+    }
+
+    // Deletar dos dados temporários
+    delete this.cardData.system.actions[actionKey];
+    
+    // Se temos node.domainCardData, deletar também de lá
+    if (this.node?.domainCardData?.system?.actions) {
+      delete this.node.domainCardData.system.actions[actionKey];
+    }
+
+    console.log(`[${MODULE_ID}] _onDeleteAction - Action deletada dos dados temporários:`, actionId);
+    
+    // Recarregar a lista de actions atualizando o formulário
+    await this.render();
+    
+    ui.notifications.info(
+      game.i18n.format(`${MODULE_ID}.edit-card.action-deleted`, { name: actionName }) ||
+      `Action "${actionName}" deletada com sucesso!`
+    );
   }
 
   _fillFormFromItem(item) {
@@ -919,27 +1200,41 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
         // SEMPRE sobrescrever a descrição com a editada (forçar após o merge)
         systemData.description = descriptionData;
         
-        // Garantir que as actions sejam preservadas explicitamente
-        // Actions são armazenadas em system.actions como objeto (não Collection)
-        if (this.baseActions) {
-          // Clonar profundamente as actions preservadas
-          systemData.actions = foundry.utils.deepClone(this.baseActions);
-          console.log(`[${MODULE_ID}] _onSave - Actions preservadas incluídas:`, Object.keys(systemData.actions).length);
-        } else if (baseSystem.actions) {
-          // Se não temos baseActions mas baseSystem tem, usar do baseSystem
-          if (baseSystem.actions instanceof foundry.utils.Collection) {
-            // Converter Collection para objeto
-            const actionsObj = {};
-            for (const [key, action] of baseSystem.actions.entries()) {
-              actionsObj[key] = foundry.utils.deepClone(action.toObject());
+          // Garantir que as actions sejam preservadas explicitamente
+          // PRIORIDADE 1: Se temos actions em cardData.system.actions (adicionadas durante edição), usar elas
+          if (this.cardData?.system?.actions && Object.keys(this.cardData.system.actions).length > 0) {
+            systemData.actions = foundry.utils.deepClone(this.cardData.system.actions);
+            console.log(`[${MODULE_ID}] _onSave - Actions do cardData incluídas:`, Object.keys(systemData.actions).length);
+          } 
+          // PRIORIDADE 2: Se não, usar baseActions (actions preservadas da carta original)
+          else if (this.baseActions) {
+            // Clonar profundamente as actions preservadas
+            systemData.actions = foundry.utils.deepClone(this.baseActions);
+            console.log(`[${MODULE_ID}] _onSave - Actions preservadas incluídas:`, Object.keys(systemData.actions).length);
+          } 
+          // PRIORIDADE 3: Se não, usar do baseSystem
+          else if (baseSystem.actions) {
+            // Se não temos baseActions mas baseSystem tem, usar do baseSystem
+            if (baseSystem.actions instanceof foundry.utils.Collection) {
+              // Converter Collection para objeto
+              const actionsObj = {};
+              for (const [key, action] of baseSystem.actions.entries()) {
+                actionsObj[key] = foundry.utils.deepClone(action.toObject());
+              }
+              systemData.actions = actionsObj;
+            } else if (typeof baseSystem.actions === 'object' && baseSystem.actions !== null) {
+              // Já é um objeto, clonar profundamente
+              systemData.actions = foundry.utils.deepClone(baseSystem.actions);
             }
-            systemData.actions = actionsObj;
-          } else if (typeof baseSystem.actions === 'object' && baseSystem.actions !== null) {
-            // Já é um objeto, clonar profundamente
-            systemData.actions = foundry.utils.deepClone(baseSystem.actions);
+            console.log(`[${MODULE_ID}] _onSave - Actions do baseSystem incluídas:`, Object.keys(systemData.actions || {}).length);
           }
-          console.log(`[${MODULE_ID}] _onSave - Actions do baseSystem incluídas:`, Object.keys(systemData.actions || {}).length);
-        }
+        
+        // Log para debug - verificar se actions estão em systemData
+        console.log(`[${MODULE_ID}] _onSave (shouldCreate) - systemData.actions antes de criar itemData:`, {
+          hasActions: !!systemData.actions,
+          actionsCount: systemData.actions ? Object.keys(systemData.actions).length : 0,
+          actionsKeys: systemData.actions ? Object.keys(systemData.actions) : []
+        });
         
         const itemData = {
           name: name,
@@ -947,6 +1242,13 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
           type: "domainCard",
           system: systemData,
         };
+        
+        // Log para debug - verificar se actions estão em itemData
+        console.log(`[${MODULE_ID}] _onSave (shouldCreate) - itemData.system.actions:`, {
+          hasActions: !!itemData.system.actions,
+          actionsCount: itemData.system.actions ? Object.keys(itemData.system.actions).length : 0,
+          actionsKeys: itemData.system.actions ? Object.keys(itemData.system.actions) : []
+        });
 
         // Se estamos criando a partir de um nó, verificar se está desbloqueado antes de adicionar
         if (this.node && this.domainId && this.talentTreeApp) {
@@ -1029,8 +1331,31 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
         }
       } else {
         // Atualizar item existente no personagem (não é de compendium)
-        // Verificar se o item realmente pertence ao personagem
-        const existingItem = this.actor.items.get(this.cardData.id);
+        // Buscar o item em todos os itens do personagem, não apenas no loadout
+        // Tentar encontrar pelo ID primeiro
+        let existingItem = this.currentItem || this.actor.items.get(this.cardData?.id);
+        
+        // Se não encontrou pelo ID, tentar encontrar pelo nome e tipo (caso o ID tenha mudado)
+        if (!existingItem && this.cardData?.name) {
+          existingItem = this.actor.items.find(item => 
+            item.type === "domainCard" && 
+            item.name === this.cardData.name &&
+            (!this.cardData.id || item.id === this.cardData.id)
+          );
+        }
+        
+        // Se ainda não encontrou e temos domainCardUuid, tentar carregar diretamente
+        if (!existingItem && this.node?.domainCardUuid) {
+          try {
+            const itemFromUuid = await foundry.utils.fromUuid(this.node.domainCardUuid);
+            if (itemFromUuid && this.actor.items.has(itemFromUuid.id)) {
+              existingItem = itemFromUuid;
+            }
+          } catch (error) {
+            console.warn(`[${MODULE_ID}] Erro ao carregar item via domainCardUuid:`, error);
+          }
+        }
+        
         if (!existingItem) {
           // Item não existe mais no personagem, criar novo
           const baseSystem = this.cardData?.system || {};
@@ -1191,9 +1516,23 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
             updateData["system.description"] = description;
           }
           
-          // Sempre preservar actions se temos baseActions (importação de carta base)
-          // Actions são armazenadas em system.actions como objeto, não como documentos embutidos
-          if (this.baseActions) {
+          // Sempre preservar actions
+          // PRIORIDADE 1: Se temos actions em cardData.system.actions (adicionadas durante edição), usar elas
+          if (this.cardData?.system?.actions && Object.keys(this.cardData.system.actions).length > 0) {
+            // Atualizar system.actions diretamente
+            // Usar dot notation para atualizar cada action individualmente
+            const actionsUpdate = {};
+            for (const [actionId, actionData] of Object.entries(this.cardData.system.actions)) {
+              // Garantir que temos _id
+              const finalActionId = actionData._id || actionId;
+              actionsUpdate[`system.actions.${finalActionId}`] = foundry.utils.deepClone(actionData);
+            }
+            // Mesclar com updateData
+            Object.assign(updateData, actionsUpdate);
+            console.log(`[${MODULE_ID}] _onSave - ${Object.keys(this.cardData.system.actions).length} actions do cardData preservadas no item existente`);
+          }
+          // PRIORIDADE 2: Se não, usar baseActions (actions preservadas da carta original)
+          else if (this.baseActions) {
             // Atualizar system.actions diretamente
             // Usar dot notation para atualizar cada action individualmente
             const actionsUpdate = {};
@@ -1290,6 +1629,15 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       
       // Salvar a árvore de talentos
       await this.talentTreeApp.saveTalentTreeData(talentTreeData);
+      
+      // Renderizar a árvore novamente para atualizar os dados na interface
+      await this.talentTreeApp.render(false);
+      
+      console.log(`[${MODULE_ID}] _associateCardToNode - Carta associada ao nó e árvore renderizada:`, {
+        nodeId: node.id,
+        domainCardUuid: node.domainCardUuid,
+        cardName: item.name
+      });
     } catch (error) {
       console.error(`[${MODULE_ID}] Erro ao associar carta ao nó:`, error);
     }
@@ -1308,6 +1656,13 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
 
       // Criar uma cópia profunda do itemData para não modificar o original
       const itemDataCopy = foundry.utils.deepClone(itemData);
+      
+      // Log para debug - verificar se actions estão em itemDataCopy antes de salvar
+      console.log(`[${MODULE_ID}] _associateCardToNodeWithoutItem - itemDataCopy.system.actions:`, {
+        hasActions: !!itemDataCopy.system?.actions,
+        actionsCount: itemDataCopy.system?.actions ? Object.keys(itemDataCopy.system.actions).length : 0,
+        actionsKeys: itemDataCopy.system?.actions ? Object.keys(itemDataCopy.system.actions) : []
+      });
       
       // IMPORTANTE: Garantir que a descrição esteja corretamente atualizada no itemData
       // A descrição pode ser string ou HTMLField (objeto com value)
@@ -1343,12 +1698,17 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       
       // Atualizar a descrição do nó
       node.description = description;
-      console.log(`[${MODULE_ID}] _associateCardToNodeWithoutItem - Descrição salva:`, description);
+      
+      // Log para debug - verificar se actions foram salvas no node.domainCardData
       console.log(`[${MODULE_ID}] _associateCardToNodeWithoutItem - Node após atualização:`, {
         id: node.id,
         label: node.label,
         icon: node.icon,
-        description: node.description
+        description: node.description,
+        hasDomainCardData: !!node.domainCardData,
+        hasActions: !!node.domainCardData?.system?.actions,
+        actionsCount: node.domainCardData?.system?.actions ? Object.keys(node.domainCardData.system.actions).length : 0,
+        actionsKeys: node.domainCardData?.system?.actions ? Object.keys(node.domainCardData.system.actions) : []
       });
       
       // Marcar como imagem para que o template renderize como <img> e não como ícone Font Awesome

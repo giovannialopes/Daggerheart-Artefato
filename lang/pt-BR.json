@@ -69,6 +69,8 @@
   "daggerheart-talent-tree.edit-card.image-url-empty": "Por favor, insira uma URL de imagem primeiro",
   "daggerheart-talent-tree.edit-card.no-actions": "Nenhuma action",
   "daggerheart-talent-tree.edit-card.action-edit-after-save": "As actions só podem ser editadas após salvar a carta.",
+  "daggerheart-talent-tree.edit-card.action-edit-compendium": "Por favor, salve a carta no personagem primeiro antes de editar as actions.",
+  "daggerheart-talent-tree.edit-card.action-edit-compendium-locked": "Não é possível editar actions de itens em compendiums bloqueados. Por favor, salve a carta no personagem primeiro.",
   "daggerheart-talent-tree.edit-card.create-action": "Criar Action",
   "daggerheart-talent-tree.edit-card.delete-action": "Deletar Action",
   "daggerheart-talent-tree.edit-card.edit-action": "Editar Action",
