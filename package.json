@@ -1,6 +1,6 @@
 {
   "name": "daggerheart-talent-tree",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Um módulo para criar e gerenciar Árvores de Talentos personalizadas com domínios customizados para jogadores de Daggerheart",
   "main": "scripts/main.js",
   "keywords": [

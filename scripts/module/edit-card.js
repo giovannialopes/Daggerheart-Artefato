@@ -196,7 +196,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     };
   }
 
-  _onRender(context, options) {
+  async _onRender(context, options) {
     super._onRender?.(context, options);
     this._attachListeners();
     this._setupDragAndDrop();
@@ -207,13 +207,37 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     if (hasCardData) {
       this._enableFormFields();
       
-      // Se temos cardData mas não temos currentItem, definir currentItem
-      if (this.cardData && !this.currentItem && this.cardData.id) {
+      // PRIORIDADE 1: Se temos node.domainCardUuid, carregar o item do personagem
+      if (!this.currentItem && this.node?.domainCardUuid) {
+        try {
+          const item = await foundry.utils.fromUuid(this.node.domainCardUuid);
+          if (item && this.actor.items.has(item.id)) {
+            this.currentItem = this.actor.items.get(item.id);
+            this.cardData = this.currentItem;
+            console.log(`[${MODULE_ID}] _onRender - currentItem carregado do domainCardUuid:`, this.currentItem.id);
+          }
+        } catch (error) {
+          console.warn(`[${MODULE_ID}] _onRender - Erro ao carregar item do domainCardUuid:`, error);
+        }
+      }
+      
+      // PRIORIDADE 2: Se temos cardData.id, tentar carregar o item
+      if (!this.currentItem && this.cardData?.id) {
         const item = this.actor.items.get(this.cardData.id);
         if (item) {
           this.currentItem = item;
-          // Garantir que cardData está atualizado com o item do personagem
           this.cardData = item;
+          console.log(`[${MODULE_ID}] _onRender - currentItem carregado do cardData.id:`, this.currentItem.id);
+        }
+      }
+      
+      // PRIORIDADE 3: Se ainda não temos currentItem, tentar encontrar pelo nome
+      if (!this.currentItem && this.cardData?.name) {
+        const item = this.actor.items.find(i => i.type === "domainCard" && i.name === this.cardData.name);
+        if (item) {
+          this.currentItem = item;
+          this.cardData = item;
+          console.log(`[${MODULE_ID}] _onRender - currentItem encontrado pelo nome:`, this.currentItem.id);
         }
       }
     } else {
@@ -494,6 +518,30 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
   async _onEditAction(actionId) {
     console.log(`[${MODULE_ID}] _onEditAction - actionId:`, actionId);
     console.log(`[${MODULE_ID}] _onEditAction - currentItem:`, this.currentItem);
+    console.log(`[${MODULE_ID}] _onEditAction - cardData:`, this.cardData);
+    console.log(`[${MODULE_ID}] _onEditAction - node.domainCardUuid:`, this.node?.domainCardUuid);
+    
+    // Se não temos currentItem mas temos domainCardUuid, tentar carregar o item
+    if (!this.currentItem && this.node?.domainCardUuid) {
+      try {
+        const item = await foundry.utils.fromUuid(this.node.domainCardUuid);
+        if (item && this.actor.items.has(item.id)) {
+          this.currentItem = this.actor.items.get(item.id);
+          console.log(`[${MODULE_ID}] _onEditAction - currentItem carregado do domainCardUuid:`, this.currentItem);
+        }
+      } catch (error) {
+        console.warn(`[${MODULE_ID}] _onEditAction - Erro ao carregar item do domainCardUuid:`, error);
+      }
+    }
+    
+    // Se ainda não temos currentItem mas temos cardData.id, tentar carregar
+    if (!this.currentItem && this.cardData?.id) {
+      const item = this.actor.items.get(this.cardData.id);
+      if (item) {
+        this.currentItem = item;
+        console.log(`[${MODULE_ID}] _onEditAction - currentItem carregado do cardData.id:`, this.currentItem);
+      }
+    }
     
     // Se temos um item existente, abrir o sheet da action
     if (this.currentItem?.system?.actions) {
@@ -599,6 +647,11 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
             return;
           }
           
+          // Se ainda não tem item, tentar usar currentItem diretamente
+          if (!actionItem) {
+            actionItem = this.currentItem;
+          }
+          
           // Se ainda não tem item, avisar que precisa salvar primeiro
           if (!actionItem) {
             ui.notifications.warn(
@@ -606,6 +659,41 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
               "Por favor, salve a carta primeiro antes de editar as actions."
             );
             return;
+          }
+          
+          // IMPORTANTE: Garantir que a action está vinculada ao item correto
+          // Se a action não tem parent válido OU o parent não é o item correto, recarregar do item
+          if (!action.parent?.parent || (action.item && action.item !== actionItem)) {
+            console.log(`[${MODULE_ID}] _onEditAction - Recarregando action do item:`, actionItem.id);
+            // Recarregar a action do item atualizado
+            const itemActions = actionItem.system.actions;
+            if (itemActions instanceof foundry.utils.Collection) {
+              action = itemActions.get(actionId);
+            } else if (typeof itemActions === 'object' && itemActions !== null) {
+              for (const [key, a] of Object.entries(itemActions)) {
+                const id = a._id || a.id || key;
+                if (id === actionId) {
+                  action = a;
+                  break;
+                }
+              }
+            }
+            
+            // Se ainda não encontrou, avisar
+            if (!action) {
+              ui.notifications.warn(
+                "Não foi possível encontrar a action no item. Por favor, recarregue a janela."
+              );
+              return;
+            }
+            
+            // Verificar novamente se tem parent válido após recarregar
+            if (!action.parent?.parent) {
+              ui.notifications.warn(
+                "A action não está vinculada corretamente ao item. Por favor, recarregue a janela."
+              );
+              return;
+            }
           }
           
           // Tentar acessar o sheet diretamente
@@ -639,76 +727,36 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
         }
       } else {
         console.warn(`[${MODULE_ID}] _onEditAction - Action não encontrada com id:`, actionId);
+        ui.notifications.warn(
+          `Action não encontrada com id: ${actionId}. Por favor, recarregue a janela.`
+        );
+        return;
       }
-    }
-    
-    // Se não temos currentItem mas temos cardData, tentar editar dos dados temporários
-    if (!this.currentItem && this.cardData?.system?.actions) {
-      // Encontrar a action nos dados temporários
-      let actionData = null;
-      for (const [key, a] of Object.entries(this.cardData.system.actions)) {
-        const id = a._id || a.id || key;
-        if (id === actionId) {
-          actionData = a;
-          break;
-        }
-      }
-
-      if (actionData) {
-        // Tentar criar uma action temporária para edição
+    } else {
+      // Não temos currentItem - tentar carregar novamente antes de desistir
+      console.warn(`[${MODULE_ID}] _onEditAction - Não temos currentItem. Tentando carregar novamente...`);
+      
+      // Tentar carregar do domainCardUuid novamente
+      if (this.node?.domainCardUuid) {
         try {
-          const ActionClass = game.system.api?.models?.actions?.actionsTypes[actionData.type] || 
-                             game.system.api?.models?.actions?.actionsTypes?.base;
-          
-          if (!ActionClass) {
-            ui.notifications.warn(
-              "Não é possível editar esta action. Por favor, salve a carta primeiro."
-            );
-            return;
-          }
-
-          // Criar um objeto temporário que simula um item para a action
-          const tempItem = {
-            system: this.cardData.system,
-            update: async (data) => {
-              // Atualizar os dados quando a action for editada
-              if (data.system?.actions) {
-                Object.assign(this.cardData.system.actions, data.system.actions);
-                // Atualizar também no node.domainCardData se existir
-                if (this.node?.domainCardData) {
-                  if (!this.node.domainCardData.system) {
-                    this.node.domainCardData.system = {};
-                  }
-                  if (!this.node.domainCardData.system.actions) {
-                    this.node.domainCardData.system.actions = {};
-                  }
-                  Object.assign(this.node.domainCardData.system.actions, data.system.actions);
-                }
-              }
-              await this.render();
-            }
-          };
-          
-          // Criar uma action temporária com parent simulado
-          const actionInstance = new ActionClass(actionData, { 
-            parent: { parent: tempItem } 
-          });
-          
-          // Tentar abrir o ActionConfig
-          const ActionConfig = game.system.api?.applications?.sheetsConfigs?.ActionConfig;
-          if (ActionConfig) {
-            const config = new ActionConfig(actionInstance);
-            config.render(true);
-            return;
+          const item = await foundry.utils.fromUuid(this.node.domainCardUuid);
+          if (item && this.actor.items.has(item.id)) {
+            this.currentItem = this.actor.items.get(item.id);
+            console.log(`[${MODULE_ID}] _onEditAction - currentItem carregado novamente:`, this.currentItem);
+            // Tentar novamente com o currentItem carregado
+            return this._onEditAction(actionId);
           }
         } catch (error) {
-          console.error(`[${MODULE_ID}] Erro ao editar action temporária:`, error);
-          ui.notifications.warn(
-            "Não é possível editar esta action. Por favor, salve a carta primeiro."
-          );
-          return;
+          console.warn(`[${MODULE_ID}] _onEditAction - Erro ao carregar item:`, error);
         }
       }
+      
+      // Se ainda não temos currentItem, avisar
+      ui.notifications.warn(
+        game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-after-save`) || 
+        "Por favor, salve a carta primeiro antes de editar as actions."
+      );
+      return;
     }
     
     // Se não temos item ainda, mas temos action preservada, avisar que precisa salvar primeiro
@@ -1547,6 +1595,10 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
           }
           
           await existingItem.update(updateData);
+          
+          // Atualizar currentItem após salvar para garantir que está sincronizado
+          this.currentItem = existingItem;
+          this.cardData = existingItem;
           
           // Se estamos editando a partir de um nó, atualizar a associação com os dados atualizados
           if (this.node && this.domainId && this.talentTreeApp && existingItem) {
