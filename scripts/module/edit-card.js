@@ -13,8 +13,8 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       minimizable: true,
     },
     position: {
-      width: 600,
-      height: "auto",
+      width: 1000,
+      height: 800,
     },
   };
 
@@ -34,7 +34,36 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     this.domainId = domainId; // ID do domínio (se estiver criando a partir de um nó)
     this.talentTreeApp = talentTreeApp; // Referência à aplicação de árvore de talentos
     this.isGM = game.user.isGM;
-    this.isNewCard = !cardData;
+    
+    // Verificar se é uma nova carta ou edição
+    // Se temos cardData com id E o item existe no personagem, é edição
+    let hasExistingItem = false;
+    let currentItem = null;
+    
+    if (cardData?.id && actor?.items) {
+      currentItem = actor.items.get(cardData.id);
+      hasExistingItem = currentItem && currentItem.type === "domainCard";
+    }
+    
+    // Se não encontrou pelo cardData.id, tentar pelo domainCardUuid do nó
+    if (!hasExistingItem && node?.domainCardUuid) {
+      // Isso será carregado assincronamente no _onSave, mas marcamos que não é nova
+      this.isNewCard = false;
+    } else {
+      this.isNewCard = !cardData || !hasExistingItem;
+    }
+    
+    this.baseActions = null; // Actions da carta base (para preservar ao criar)
+    this.currentItem = currentItem; // Item atual (se estiver editando um item existente)
+    
+    console.log(`[${MODULE_ID}] EditCardApplication constructor:`, {
+      hasCardData: !!cardData,
+      cardDataId: cardData?.id,
+      hasExistingItem: hasExistingItem,
+      isNewCard: this.isNewCard,
+      hasCurrentItem: !!this.currentItem,
+      nodeDomainCardUuid: node?.domainCardUuid
+    });
   }
 
   static async open(actor, cardData = null, node = null, domainId = null, talentTreeApp = null) {
@@ -71,6 +100,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       cardName: game.i18n.localize(`${MODULE_ID}.edit-card.card-name`),
       cardImage: game.i18n.localize(`${MODULE_ID}.edit-card.card-image`),
       cardDescription: game.i18n.localize(`${MODULE_ID}.edit-card.card-description`),
+      recallCost: game.i18n.localize("DAGGERHEART.ITEMS.DomainCard.recallCost") || "Recall Cost",
       save: game.i18n.localize(`${MODULE_ID}.edit-card.save`),
       cancel: game.i18n.localize(`${MODULE_ID}.edit-card.cancel`),
       dragCardHelp: game.i18n.localize(`${MODULE_ID}.edit-card.drag-card-help`),
@@ -90,18 +120,67 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       }
     }
 
+    // Obter recallCost do system
+    let recallCost = 0;
+    if (this.cardData?.system?.recallCost !== undefined) {
+      recallCost = this.cardData.system.recallCost;
+    }
+
     const cardFields = {
       name: this.cardData?.name || "",
-      img: this.cardData?.img || "icons/svg/item-bag.svg",
+      img: this.cardData?.img || "icons/svg/downgrade.svg",
       description: description,
+      recallCost: recallCost,
     };
+
+    // Verificar se realmente tem dados de carta (não é apenas uma nova carta vazia)
+    const hasCardData = this.cardData && (this.cardData.id || this.cardData.name || this.cardData.system);
+
+    // Preparar lista de actions para exibição
+    let actionsList = [];
+    if (this.currentItem?.system?.actions) {
+      // Se temos um item existente, usar suas actions
+      if (this.currentItem.system.actions instanceof foundry.utils.Collection) {
+        actionsList = Array.from(this.currentItem.system.actions.values()).map(action => ({
+          id: action.id,
+          name: action.name,
+          img: action.img,
+          disabled: action.disabled,
+        }));
+      } else if (typeof this.currentItem.system.actions === 'object' && this.currentItem.system.actions !== null) {
+        // Actions como objeto
+        actionsList = Object.values(this.currentItem.system.actions).map(action => ({
+          id: action._id || action.id,
+          name: action.name || "Action",
+          img: action.img || "icons/svg/downgrade.svg",
+          disabled: action.disabled || false,
+        }));
+      }
+    } else if (this.baseActions) {
+      // Se não temos item mas temos actions preservadas, usar elas
+      actionsList = Object.values(this.baseActions).map(action => ({
+        id: action._id || action.id || foundry.utils.randomID(),
+        name: action.name || "Action",
+        img: action.img || "icons/svg/downgrade.svg",
+        disabled: action.disabled || false,
+        _preserved: true, // Marcar como preservado
+      }));
+    }
 
     return {
       actor: this.actor,
       cardData: cardFields,
+      hasCardData: hasCardData, // Flag para indicar se tem carta carregada
       isNewCard: this.isNewCard,
       isGM: this.isGM,
-      i18n: i18n,
+      i18n: {
+        ...i18n,
+        actions: game.i18n.localize("DAGGERHEART.GENERAL.Action.plural") || "Actions",
+        editAction: game.i18n.localize("CONTROLS.CommonEdit") || "Editar",
+        noActions: game.i18n.localize(`${MODULE_ID}.edit-card.no-actions`) || "Nenhuma action",
+      },
+      actions: actionsList,
+      hasActions: actionsList.length > 0,
     };
   }
 
@@ -109,6 +188,25 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     super._onRender?.(context, options);
     this._attachListeners();
     this._setupDragAndDrop();
+    
+    // Se já tem dados da carta (edição), habilitar campos
+    const hasCardData = this.cardData && (this.cardData.id || this.cardData.name || this.cardData.system);
+    if (hasCardData) {
+      this._enableFormFields();
+      
+      // Se temos cardData mas não temos currentItem, definir currentItem
+      if (this.cardData && !this.currentItem && this.cardData.id) {
+        const item = this.actor.items.get(this.cardData.id);
+        if (item) {
+          this.currentItem = item;
+          // Garantir que cardData está atualizado com o item do personagem
+          this.cardData = item;
+        }
+      }
+    } else {
+      // Garantir que os campos estão desabilitados
+      this._disableFormFields();
+    }
   }
 
   _attachListeners() {
@@ -127,17 +225,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       this.close();
     });
 
-    // Listener para mudança de imagem
-    $element.find("#card-image-input").off("change").on("change", (e) => {
-      const file = e.target.files[0];
-      if (file && file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          $element.find("#card-image-preview").attr("src", event.target.result);
-        };
-        reader.readAsDataURL(file);
-      }
-    });
+    // Listener de upload de arquivo removido - apenas edição via URL
 
     // Listener para preview de imagem via URL
     $element.find("#card-image-url").off("input").on("input", (e) => {
@@ -145,9 +233,16 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       if (url) {
         $element.find("#card-image-preview").attr("src", url).on("error", function() {
           // Se a imagem falhar ao carregar, mostrar ícone padrão
-          $(this).attr("src", "icons/svg/item-bag.svg");
+          $(this).attr("src", "icons/svg/downgrade.svg");
         });
       }
+    });
+
+    // Listener para botões de editar action
+    $element.find(".edit-action-button").off("click").on("click", async (e) => {
+      e.preventDefault();
+      const actionId = $(e.currentTarget).data("action-id");
+      await this._onEditAction(actionId);
     });
 
     // Listener para botão de procurar imagem (FilePicker do Foundry)
@@ -166,7 +261,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
             preview.attr("src", ""); // Limpar primeiro para forçar reload
             preview.attr("src", path).on("error", function() {
               ui.notifications.warn(game.i18n.localize(`${MODULE_ID}.edit-card.image-load-error`));
-              $(this).attr("src", "icons/svg/item-bag.svg");
+              $(this).attr("src", "icons/svg/downgrade.svg");
             });
           },
           top: this.position?.top || 100,
@@ -179,39 +274,79 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       }
     });
 
-    // Listener para botão de carregar imagem
-    $element.find(".load-image-button").off("click").on("click", (e) => {
-      e.preventDefault();
-      const url = $element.find("#card-image-url").val().trim();
-      if (url) {
-        // Forçar atualização do preview
-        const preview = $element.find("#card-image-preview");
-        preview.off("error"); // Remover handlers anteriores
-        preview.attr("src", ""); // Limpar primeiro para forçar reload
-        preview.attr("src", url);
-        
-        // Adicionar handler de erro apenas uma vez
-        preview.one("error", function() {
-          ui.notifications.warn(game.i18n.localize(`${MODULE_ID}.edit-card.image-load-error`));
-          $(this).attr("src", "icons/svg/item-bag.svg");
-        });
-        
-        // Se carregar com sucesso, fazer um pequeno delay para verificar
-        preview.one("load", function() {
-          // Imagem carregada com sucesso
-        });
-      } else {
-        ui.notifications.warn(game.i18n.localize(`${MODULE_ID}.edit-card.image-url-empty`));
-      }
+    // Listener de upload de arquivo removido - apenas edição via URL
+
+    // Listener para clicar na imagem e reabrir o Compendium Browser
+    // Usar mousedown/mouseup para detectar clique simples sem interferir com drag
+    let mouseDownTime = 0;
+    let mouseDownPos = null;
+    
+    $element.find("#card-image-preview, .card-drop-zone").off("mousedown").on("mousedown", (e) => {
+      mouseDownTime = Date.now();
+      mouseDownPos = { x: e.clientX, y: e.clientY };
     });
 
-    // Listener para Enter no campo de URL
-    $element.find("#card-image-url").off("keypress").on("keypress", (e) => {
-      if (e.which === 13) { // Enter
-        e.preventDefault();
-        $element.find(".load-image-button").click();
+    $element.find("#card-image-preview, .card-drop-zone").off("mouseup").on("mouseup", async (e) => {
+      // Verificar se foi um clique simples (não um drag)
+      const mouseUpTime = Date.now();
+      const timeDiff = mouseUpTime - mouseDownTime;
+      const isClick = timeDiff < 200; // Menos de 200ms
+      
+      if (mouseDownPos) {
+        const distance = Math.sqrt(
+          Math.pow(e.clientX - mouseDownPos.x, 2) + 
+          Math.pow(e.clientY - mouseDownPos.y, 2)
+        );
+        const isDrag = distance > 5; // Se moveu mais de 5px, é um drag
+        
+        if (isClick && !isDrag) {
+          e.preventDefault();
+          e.stopPropagation();
+          await this._openCompendiumBrowser();
+        }
       }
+      
+      mouseDownTime = 0;
+      mouseDownPos = null;
     });
+  }
+
+  async _openCompendiumBrowser() {
+    try {
+      // Verificar se o Compendium Browser está aberto
+      const compendiumBrowser = ui.compendiumBrowser;
+      if (compendiumBrowser && compendiumBrowser.rendered) {
+        // Se já está aberto, apenas trazer para frente
+        compendiumBrowser.bringToTop();
+        return;
+      }
+
+      // Preparar os presets do Compendium Browser
+      const playerDomains = this.actor?.system?.domains || [];
+      
+      const presets = {
+        folder: 'domains',
+        render: {
+          noFolder: true
+        }
+      };
+
+      // Filtrar apenas cartas dos domínios permitidos pela classe do jogador
+      if (Array.isArray(playerDomains) && playerDomains.length > 0) {
+        presets.filter = {
+          'system.domain': { 
+            key: 'system.domain', 
+            value: playerDomains 
+          }
+        };
+      }
+
+      // Abrir o Compendium Browser
+      await compendiumBrowser.open(presets);
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Erro ao abrir Compendium Browser:`, error);
+      ui.notifications.error(`Erro ao abrir Compendium Browser: ${error.message}`);
+    }
   }
 
   _setupDragAndDrop() {
@@ -253,15 +388,128 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
           if (item && item.type === "domainCard") {
             // Preencher o formulário com os dados do item arrastado
             this._fillFormFromItem(item);
+            // Habilitar todos os campos
+            this._enableFormFields();
             ui.notifications.info(
               game.i18n.format(`${MODULE_ID}.edit-card.card-loaded`, { name: item.name })
             );
+            
+            // Fechar o Compendium Browser automaticamente após selecionar a carta
+            if (ui.compendiumBrowser && ui.compendiumBrowser.rendered) {
+              ui.compendiumBrowser.close();
+            }
           }
         }
       } catch (error) {
         // Erro silencioso ao processar item arrastado
       }
     });
+  }
+
+  _enableFormFields() {
+    if (!this.element) return;
+    const $element = this.element instanceof jQuery ? this.element : $(this.element);
+    
+    // Habilitar todos os campos
+      $element.find("#card-name").prop("disabled", false);
+      $element.find("#card-image-url").prop("disabled", false);
+      $element.find("#card-description").prop("disabled", false);
+      $element.find("#card-recall-cost").prop("disabled", false);
+      $element.find(".browse-image-button").prop("disabled", false);
+  }
+
+  _disableFormFields() {
+    if (!this.element) return;
+    const $element = this.element instanceof jQuery ? this.element : $(this.element);
+    
+    // Desabilitar todos os campos
+    $element.find("#card-name").prop("disabled", true);
+    $element.find("#card-image-url").prop("disabled", true);
+    $element.find("#card-description").prop("disabled", true);
+    $element.find("#card-recall-cost").prop("disabled", true);
+    $element.find(".browse-image-button").prop("disabled", true);
+  }
+
+  async _onEditAction(actionId) {
+    console.log(`[${MODULE_ID}] _onEditAction - actionId:`, actionId);
+    console.log(`[${MODULE_ID}] _onEditAction - currentItem:`, this.currentItem);
+    
+    // Se temos um item existente, abrir o sheet da action
+    if (this.currentItem?.system?.actions) {
+      let action = null;
+      
+      // Tentar encontrar a action
+      if (this.currentItem.system.actions instanceof foundry.utils.Collection) {
+        action = this.currentItem.system.actions.get(actionId);
+        console.log(`[${MODULE_ID}] _onEditAction - Action encontrada via Collection:`, action);
+      } else if (typeof this.currentItem.system.actions === 'object' && this.currentItem.system.actions !== null) {
+        // Tentar encontrar por _id ou id em todas as actions
+        for (const [key, a] of Object.entries(this.currentItem.system.actions)) {
+          const id = a._id || a.id || key;
+          if (id === actionId) {
+            action = a;
+            console.log(`[${MODULE_ID}] _onEditAction - Action encontrada via objeto:`, action);
+            break;
+          }
+        }
+      }
+      
+      if (action) {
+        // Actions no Daggerheart têm um sheet config através do metadata
+        try {
+          // Tentar acessar o sheet diretamente
+          if (action.sheet) {
+            console.log(`[${MODULE_ID}] _onEditAction - Abrindo sheet da action`);
+            action.sheet.render(true);
+            return;
+          }
+          
+          // Se não tem sheet, tentar criar usando o ActionConfig
+          const ActionConfig = game.system.api?.applications?.sheetsConfigs?.ActionConfig;
+          if (ActionConfig) {
+            console.log(`[${MODULE_ID}] _onEditAction - Criando ActionConfig`);
+            const config = new ActionConfig(action);
+            config.render(true);
+            return;
+          }
+          
+          // Última tentativa: usar o sheetClass do metadata
+          const sheetClass = action.constructor?.metadata?.sheetClass;
+          if (sheetClass) {
+            console.log(`[${MODULE_ID}] _onEditAction - Usando sheetClass do metadata`);
+            const config = new sheetClass(action);
+            config.render(true);
+            return;
+          }
+        } catch (error) {
+          console.error(`[${MODULE_ID}] Erro ao abrir sheet da action:`, error);
+          ui.notifications.error(`Erro ao abrir editor de action: ${error.message}`);
+          return;
+        }
+      } else {
+        console.warn(`[${MODULE_ID}] _onEditAction - Action não encontrada com id:`, actionId);
+      }
+    }
+    
+    // Se não temos item ainda, mas temos action preservada, avisar que precisa salvar primeiro
+    if (this.baseActions) {
+      const actionData = Object.values(this.baseActions).find(a => {
+        const id = a._id || a.id || foundry.utils.randomID();
+        return id === actionId;
+      });
+      if (actionData) {
+        ui.notifications.warn(
+          game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-after-save`) || 
+          "As actions só podem ser editadas após salvar a carta."
+        );
+        return;
+      }
+    }
+    
+    ui.notifications.warn(
+      game.i18n.localize(`${MODULE_ID}.edit-card.action-not-found`) || 
+      "Action não encontrada. Certifique-se de que a carta foi salva primeiro."
+    );
   }
 
   _fillFormFromItem(item) {
@@ -272,7 +520,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     // Preencher campos do formulário
     $element.find("#card-name").val(item.name || "");
     $element.find("#card-image-url").val(item.img || "");
-    $element.find("#card-image-preview").attr("src", item.img || "icons/svg/item-bag.svg");
+    $element.find("#card-image-preview").attr("src", item.img || "icons/svg/downgrade.svg");
     
     // Preencher descrição e ação
     if (item.system) {
@@ -286,11 +534,36 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
         }
       }
       $element.find("#card-description").val(description);
+      
+      // Preencher recallCost
+      const recallCost = item.system.recallCost !== undefined ? item.system.recallCost : 0;
+      $element.find("#card-recall-cost").val(recallCost);
+      
+      // Preservar actions da carta base
+      if (item.system.actions) {
+        // Actions podem ser um objeto ou Collection
+        if (item.system.actions instanceof foundry.utils.Collection) {
+          // Converter Collection para objeto
+          const actionsObj = {};
+          for (const [key, action] of item.system.actions.entries()) {
+            actionsObj[key] = foundry.utils.deepClone(action.toObject());
+          }
+          this.baseActions = actionsObj;
+        } else if (typeof item.system.actions === 'object' && item.system.actions !== null) {
+          // Já é um objeto, clonar profundamente
+          this.baseActions = foundry.utils.deepClone(item.system.actions);
+        }
+        console.log(`[${MODULE_ID}] _fillFormFromItem - Actions preservadas:`, Object.keys(this.baseActions || {}).length);
+      }
     }
 
     // Atualizar referência da carta para edição
     this.cardData = item;
+    this.currentItem = item; // Guardar referência ao item se existir
     this.isNewCard = false;
+    
+    // Re-renderizar para atualizar a lista de efeitos
+    this.render(false);
   }
 
   async _onSave(event) {
@@ -305,20 +578,107 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     
     // Obter dados do formulário
     const name = formData.get("name") || "Carta sem Nome";
-    const img = formData.get("img") || "icons/svg/item-bag.svg";
+    const img = formData.get("img") || "icons/svg/downgrade.svg";
     
     // IMPORTANTE: Pegar descrição do textarea diretamente via jQuery para garantir que pegamos o valor correto
     // O FormData pode não capturar corretamente o conteúdo do textarea em alguns casos
     const descriptionTextarea = $element.find("#card-description");
     const description = descriptionTextarea.val() || "";
+    
+    // Pegar recallCost do formulário
+    const recallCost = parseInt($element.find("#card-recall-cost").val()) || 0;
 
     try {
+      // PRIORIDADE 1: Verificar se temos uma carta associada ao nó através do domainCardUuid
+      // Se há domainCardUuid, SEMPRE tentar carregar e atualizar essa carta
+      if (this.node?.domainCardUuid) {
+        try {
+          const itemFromNode = await foundry.utils.fromUuid(this.node.domainCardUuid);
+          // Verificar se o item pertence ao personagem
+          if (itemFromNode && this.actor.items.has(itemFromNode.id)) {
+            // Se temos um item do nó que está no personagem, usar ele para atualização
+            this.cardData = itemFromNode;
+            this.currentItem = itemFromNode;
+            this.isNewCard = false;
+            console.log(`[${MODULE_ID}] _onSave - Item carregado do nó (domainCardUuid):`, itemFromNode.id, itemFromNode.name);
+          } else {
+            console.warn(`[${MODULE_ID}] _onSave - Item do nó não está no personagem:`, itemFromNode?.id);
+          }
+        } catch (error) {
+          console.warn(`[${MODULE_ID}] _onSave - Erro ao carregar item do nó:`, error);
+        }
+      }
+      
+      // PRIORIDADE 2: Se não temos currentItem mas temos cardData com id, tentar carregar
+      if (!this.currentItem && this.cardData?.id) {
+        const itemById = this.actor.items.get(this.cardData.id);
+        if (itemById && itemById.type === "domainCard") {
+          this.currentItem = itemById;
+          this.cardData = itemById; // Atualizar cardData com o item do personagem
+          this.isNewCard = false;
+          console.log(`[${MODULE_ID}] _onSave - Item encontrado pelo ID:`, itemById.id, itemById.name);
+        }
+      }
+      
+      // Verificar se o item existe no personagem e pode ser atualizado
+      // Priorizar currentItem se disponível, senão tentar pelo cardData.id
+      let existingItem = this.currentItem;
+      if (!existingItem && this.cardData?.id) {
+        existingItem = this.actor.items.get(this.cardData.id);
+      }
+      
+      // Se ainda não encontrou e temos domainCardUuid, tentar carregar diretamente
+      if (!existingItem && this.node?.domainCardUuid) {
+        try {
+          const itemFromUuid = await foundry.utils.fromUuid(this.node.domainCardUuid);
+          if (itemFromUuid && this.actor.items.has(itemFromUuid.id)) {
+            existingItem = itemFromUuid;
+            this.cardData = itemFromUuid;
+            this.currentItem = itemFromUuid;
+            this.isNewCard = false;
+            console.log(`[${MODULE_ID}] _onSave - Item encontrado via domainCardUuid:`, existingItem.id, existingItem.name);
+          }
+        } catch (error) {
+          console.warn(`[${MODULE_ID}] Erro ao carregar item via domainCardUuid:`, error);
+        }
+      }
+      
+      const canUpdate = existingItem && existingItem.type === "domainCard";
+      
+      console.log(`[${MODULE_ID}] _onSave - Verificação:`, {
+        isNewCard: this.isNewCard,
+        hasCardData: !!this.cardData,
+        cardDataId: this.cardData?.id,
+        hasCurrentItem: !!this.currentItem,
+        hasExistingItem: !!existingItem,
+        existingItemId: existingItem?.id,
+        existingItemName: existingItem?.name,
+        canUpdate: canUpdate,
+        nodeDomainCardUuid: this.node?.domainCardUuid
+      });
+      
       // Verificar se é um item de compendium (não pode atualizar, precisa criar novo)
       const isCompendiumItem = this.cardData?.pack !== undefined || 
                                 this.cardData?.collection?.metadata?.packageName !== undefined ||
-                                (this.cardData?.id && !this.actor.items.has(this.cardData.id));
+                                (this.cardData?.id && !canUpdate);
       
-      if (this.isNewCard || !this.cardData?.id || isCompendiumItem) {
+      // Se temos uma carta associada ao nó (domainCardUuid) E existingItem, SEMPRE atualizar
+      const hasNodeCard = !!this.node?.domainCardUuid;
+      
+      // Decidir se deve criar ou atualizar
+      // REGRA: Se temos domainCardUuid E existingItem, SEMPRE atualizar (não criar nova)
+      const shouldUpdate = (hasNodeCard && existingItem && canUpdate) || (canUpdate && !isCompendiumItem);
+      const shouldCreate = !shouldUpdate && ((this.isNewCard && !hasNodeCard) || !this.cardData?.id || isCompendiumItem || (!canUpdate && !hasNodeCard));
+      
+      console.log(`[${MODULE_ID}] _onSave - Decisão:`, {
+        shouldUpdate: shouldUpdate,
+        shouldCreate: shouldCreate,
+        hasNodeCard: hasNodeCard,
+        hasExistingItem: !!existingItem,
+        canUpdate: canUpdate
+      });
+      
+      if (shouldCreate) {
         // Criar novo item (sempre criar se for novo, de compendium, ou não estiver no personagem)
         const baseSystem = this.cardData?.system || {};
         
@@ -330,22 +690,51 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
         }
         
         // Preparar dados do item com campos obrigatórios do domainCard
+        // IMPORTANTE: Mesclar baseSystem primeiro, depois sobrescrever com os valores editados
+        // Clonar baseSystem para não modificar o original
+        const clonedBaseSystem = foundry.utils.deepClone(baseSystem);
+        const systemData = foundry.utils.mergeObject(
+          clonedBaseSystem,
+          {
+            domain: baseSystem.domain || CONFIG.DH?.DOMAIN?.domains?.arcana?.id || "arcana",
+            level: baseSystem.level || 1,
+            recallCost: recallCost,
+            type: baseSystem.type || CONFIG.DH?.DOMAIN?.cardTypes?.ability?.id || "ability",
+            inVault: baseSystem.inVault || false,
+          },
+          { inplace: false, insertKeys: true } // Inserir campos extras
+        );
+        
+        // SEMPRE sobrescrever a descrição com a editada (forçar após o merge)
+        systemData.description = descriptionData;
+        
+        // Garantir que as actions sejam preservadas explicitamente
+        // Actions são armazenadas em system.actions como objeto (não Collection)
+        if (this.baseActions) {
+          // Clonar profundamente as actions preservadas
+          systemData.actions = foundry.utils.deepClone(this.baseActions);
+          console.log(`[${MODULE_ID}] _onSave - Actions preservadas incluídas:`, Object.keys(systemData.actions).length);
+        } else if (baseSystem.actions) {
+          // Se não temos baseActions mas baseSystem tem, usar do baseSystem
+          if (baseSystem.actions instanceof foundry.utils.Collection) {
+            // Converter Collection para objeto
+            const actionsObj = {};
+            for (const [key, action] of baseSystem.actions.entries()) {
+              actionsObj[key] = foundry.utils.deepClone(action.toObject());
+            }
+            systemData.actions = actionsObj;
+          } else if (typeof baseSystem.actions === 'object' && baseSystem.actions !== null) {
+            // Já é um objeto, clonar profundamente
+            systemData.actions = foundry.utils.deepClone(baseSystem.actions);
+          }
+          console.log(`[${MODULE_ID}] _onSave - Actions do baseSystem incluídas:`, Object.keys(systemData.actions || {}).length);
+        }
+        
         const itemData = {
           name: name,
           img: img,
           type: "domainCard",
-          system: foundry.utils.mergeObject(
-            {
-              domain: baseSystem.domain || CONFIG.DH?.DOMAIN?.domains?.arcana?.id || "arcana",
-              level: baseSystem.level || 1,
-              recallCost: baseSystem.recallCost || 0,
-              type: baseSystem.type || CONFIG.DH?.DOMAIN?.cardTypes?.ability?.id || "ability",
-              inVault: baseSystem.inVault || false,
-              description: descriptionData,
-            },
-            baseSystem,
-            { inplace: false, insertKeys: false } // Preservar campos extras, mas não sobrescrever os obrigatórios
-          ),
+          system: systemData,
         };
 
         // Se estamos criando a partir de um nó, verificar se está desbloqueado antes de adicionar
@@ -441,22 +830,50 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
             descriptionData = foundry.utils.mergeObject(baseSystem.description, { value: description }, { inplace: false });
           }
           
+          // Preparar descrição - pode ser string ou HTMLField
+          let descriptionDataForItem = description;
+          if (baseSystem.description && typeof baseSystem.description === "object" && baseSystem.description.value !== undefined) {
+            descriptionDataForItem = foundry.utils.mergeObject(baseSystem.description, { value: description }, { inplace: false });
+          }
+          
+          // Clonar baseSystem para não modificar o original
+          const clonedBaseSystem = foundry.utils.deepClone(baseSystem);
+          const systemData = foundry.utils.mergeObject(
+            clonedBaseSystem,
+            {
+              domain: baseSystem.domain || CONFIG.DH?.DOMAIN?.domains?.arcana?.id || "arcana",
+              level: baseSystem.level || 1,
+              recallCost: recallCost,
+              type: baseSystem.type || CONFIG.DH?.DOMAIN?.cardTypes?.ability?.id || "ability",
+              inVault: baseSystem.inVault || false,
+            },
+            { inplace: false, insertKeys: true } // Inserir campos extras
+          );
+          
+          // SEMPRE sobrescrever a descrição com a editada (forçar após o merge)
+          systemData.description = descriptionDataForItem;
+          
+          // Garantir que as actions sejam preservadas explicitamente
+          if (this.baseActions) {
+            systemData.actions = foundry.utils.deepClone(this.baseActions);
+            console.log(`[${MODULE_ID}] _onSave (item não existe) - Actions preservadas:`, Object.keys(systemData.actions).length);
+          } else if (baseSystem.actions) {
+            if (baseSystem.actions instanceof foundry.utils.Collection) {
+              const actionsObj = {};
+              for (const [key, action] of baseSystem.actions.entries()) {
+                actionsObj[key] = foundry.utils.deepClone(action.toObject());
+              }
+              systemData.actions = actionsObj;
+            } else if (typeof baseSystem.actions === 'object' && baseSystem.actions !== null) {
+              systemData.actions = foundry.utils.deepClone(baseSystem.actions);
+            }
+          }
+          
           const itemData = {
             name: name,
             img: img,
             type: "domainCard",
-            system: foundry.utils.mergeObject(
-              {
-                domain: baseSystem.domain || CONFIG.DH?.DOMAIN?.domains?.arcana?.id || "arcana",
-                level: baseSystem.level || 1,
-                recallCost: baseSystem.recallCost || 0,
-                type: baseSystem.type || CONFIG.DH?.DOMAIN?.cardTypes?.ability?.id || "ability",
-                inVault: baseSystem.inVault || false,
-                description: descriptionData,
-              },
-              baseSystem,
-              { inplace: false, insertKeys: false }
-            ),
+            system: systemData,
           };
           
           // Se estamos criando a partir de um nó, verificar se está desbloqueado antes de adicionar
@@ -512,31 +929,79 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
             }
           } else {
             // Não está associado a um nó, criar normalmente
-            await Item.create([itemData], { parent: this.actor });
-            ui.notifications.info(
-              game.i18n.format(`${MODULE_ID}.edit-card.card-added`, { name: name })
-            );
+            const createdItems = await Item.create([itemData], { parent: this.actor });
+            const createdItem = createdItems[0];
+            if (createdItem) {
+              ui.notifications.info(
+                game.i18n.format(`${MODULE_ID}.edit-card.card-added`, { name: name })
+              );
+            }
           }
-        } else {
+        } else if (shouldUpdate) {
           // Atualizar item existente
+          // Usar o existingItem que já foi verificado anteriormente
+          if (!existingItem) {
+            // Item não existe mais, tentar encontrar pelo cardData.id
+            const itemById = this.cardData?.id ? this.actor.items.get(this.cardData.id) : null;
+            if (itemById && itemById.type === "domainCard") {
+              existingItem = itemById;
+            } else {
+              // Item não existe mais, criar novo
+              ui.notifications.warn(`Item não encontrado no personagem. Criando nova carta.`);
+              // Recursivamente chamar a lógica de criação
+              this.isNewCard = true;
+              this.cardData = null;
+              this.currentItem = null;
+              // Re-executar a lógica de criação (chamando novamente o método)
+              return await this._onSave(event);
+            }
+          }
+          
+          console.log(`[${MODULE_ID}] _onSave - Atualizando item existente:`, existingItem.id, existingItem.name);
+          
           // Preservar todos os campos do sistema e apenas atualizar descrição e nome/img
           // Descrição pode ser HTMLField (objeto com value) ou string direto
           const currentDescription = existingItem.system.description;
           
           // Sempre atualizar a descrição - HTMLField aceita string pura ou HTML
-          // IMPORTANTE: Usar dot notation para atualizar apenas o value do HTMLField
-          // Se tentar atualizar "system.description" diretamente, pode não funcionar corretamente
+          // IMPORTANTE: Verificar se description é um HTMLField (objeto) ou string
           const updateData = {
             name: name,
             img: img,
-            "system.description.value": description, // Dot notation para atualizar apenas o value
+            "system.recallCost": recallCost,
           };
+          
+          // Atualizar descrição baseado no tipo
+          if (currentDescription && typeof currentDescription === "object" && currentDescription.value !== undefined) {
+            // É um HTMLField, usar dot notation para atualizar apenas o value
+            updateData["system.description.value"] = description;
+          } else {
+            // É uma string, atualizar diretamente
+            updateData["system.description"] = description;
+          }
+          
+          // Sempre preservar actions se temos baseActions (importação de carta base)
+          // Actions são armazenadas em system.actions como objeto, não como documentos embutidos
+          if (this.baseActions) {
+            // Atualizar system.actions diretamente
+            // Usar dot notation para atualizar cada action individualmente
+            const actionsUpdate = {};
+            for (const [actionId, actionData] of Object.entries(this.baseActions)) {
+              // Garantir que temos _id
+              const finalActionId = actionData._id || actionId;
+              actionsUpdate[`system.actions.${finalActionId}`] = foundry.utils.deepClone(actionData);
+            }
+            // Mesclar com updateData
+            Object.assign(updateData, actionsUpdate);
+            console.log(`[${MODULE_ID}] _onSave - ${Object.keys(this.baseActions).length} actions preservadas no item existente`);
+          }
           
           await existingItem.update(updateData);
           
-          // Se estamos editando a partir de um nó, apenas atualizar a associação (não precisa verificar desbloqueio, pois o item já existe)
+          // Se estamos editando a partir de um nó, atualizar a associação com os dados atualizados
           if (this.node && this.domainId && this.talentTreeApp && existingItem) {
-            await this._associateCardToNode(existingItem);
+            // Passar a descrição diretamente para garantir que usamos o valor atualizado
+            await this._associateCardToNode(existingItem, description);
           }
           
           ui.notifications.info(
@@ -554,7 +1019,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     }
   }
 
-  async _associateCardToNode(item) {
+  async _associateCardToNode(item, descriptionOverride = null) {
     if (!this.node || !this.domainId || !this.talentTreeApp) return;
     
       // Verificar se o item existe e tem UUID
@@ -577,6 +1042,32 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       node.label = item.name;
       node.icon = item.img;
       
+      // Atualizar a descrição do nó
+      // Se descriptionOverride foi fornecido, usar ele (caso do update)
+      // Caso contrário, tentar ler do item
+      if (descriptionOverride !== null) {
+        node.description = descriptionOverride;
+        console.log(`[${MODULE_ID}] _associateCardToNode - Descrição salva do override:`, descriptionOverride);
+      } else if (item.system && item.system.description) {
+        if (typeof item.system.description === "object" && item.system.description.value !== undefined) {
+          node.description = item.system.description.value;
+          console.log(`[${MODULE_ID}] _associateCardToNode - Descrição salva do item.value:`, item.system.description.value);
+        } else {
+          node.description = item.system.description;
+          console.log(`[${MODULE_ID}] _associateCardToNode - Descrição salva do item:`, item.system.description);
+        }
+      } else {
+        console.warn(`[${MODULE_ID}] _associateCardToNode - Nenhuma descrição encontrada no item`);
+      }
+      
+      console.log(`[${MODULE_ID}] _associateCardToNode - Node após atualização:`, {
+        id: node.id,
+        label: node.label,
+        icon: node.icon,
+        description: node.description,
+        domainCardUuid: node.domainCardUuid
+      });
+      
       // Marcar como imagem para que o template renderize como <img> e não como ícone Font Awesome
       node.isImage = true;
       
@@ -589,7 +1080,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       // Salvar a árvore de talentos
       await this.talentTreeApp.saveTalentTreeData(talentTreeData);
     } catch (error) {
-      // Erro silencioso ao associar carta ao nó
+      console.error(`[${MODULE_ID}] Erro ao associar carta ao nó:`, error);
     }
   }
 
@@ -638,6 +1129,16 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       // Atualizar também o nome e ícone do nó para refletir a carta
       node.label = name;
       node.icon = img;
+      
+      // Atualizar a descrição do nó
+      node.description = description;
+      console.log(`[${MODULE_ID}] _associateCardToNodeWithoutItem - Descrição salva:`, description);
+      console.log(`[${MODULE_ID}] _associateCardToNodeWithoutItem - Node após atualização:`, {
+        id: node.id,
+        label: node.label,
+        icon: node.icon,
+        description: node.description
+      });
       
       // Marcar como imagem para que o template renderize como <img> e não como ícone Font Awesome
       node.isImage = true;

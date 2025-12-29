@@ -58,7 +58,24 @@ export class SelectCardApplication extends HandlebarsApplicationMixin(Applicatio
 
   async _prepareContext(options) {
     // Obter todas as cartas de domínio do personagem
-    const domainCards = this.actor.items.filter(item => item.type === "domainCard");
+    let domainCards = this.actor.items.filter(item => item.type === "domainCard");
+    
+    // Filtrar cartas de acordo com a classe do jogador
+    try {
+      // Obter domínios da classe do jogador (pode ser um getter)
+      const playerDomains = this.actor.system?.domains || [];
+      
+      if (Array.isArray(playerDomains) && playerDomains.length > 0) {
+        // Filtrar apenas cartas cujo domínio está na lista de domínios da classe
+        domainCards = domainCards.filter(card => {
+          const cardDomain = card.system?.domain;
+          return cardDomain && playerDomains.includes(cardDomain);
+        });
+      }
+    } catch (error) {
+      console.warn(`[${MODULE_ID}] Erro ao filtrar cartas por classe:`, error);
+      // Se houver erro, mostrar todas as cartas
+    }
     
     // Pré-localizar strings para o template
     const i18n = {
@@ -148,9 +165,16 @@ export class SelectCardApplication extends HandlebarsApplicationMixin(Applicatio
     node.icon = card.img;
     
     // Obter descrição da carta se disponível
-    if (card.system?.description) {
-      node.description = card.system.description;
+    if (card.system && card.system.description) {
+      if (typeof card.system.description === "object" && card.system.description.value !== undefined) {
+        node.description = card.system.description.value;
+      } else {
+        node.description = card.system.description;
+      }
     }
+    
+    // Marcar como imagem para que o template renderize como <img> e não como ícone Font Awesome
+    node.isImage = true;
 
     await this.talentTreeApp.saveTalentTreeData(talentTreeData);
     

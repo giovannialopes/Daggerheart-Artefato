@@ -64,5 +64,16 @@
   "daggerheart-talent-tree.talent-tree.decrease-level": "Decrease Level",
   "daggerheart-talent-tree.talent-tree.available-nodes": "Available Nodes",
   "daggerheart-talent-tree.talent-tree.node-not-available": "This node is not available for unlocking at the current level",
-  "daggerheart-talent-tree.talent-tree.node-requires-connection": "This node requires a connected node to be unlocked first"
+  "daggerheart-talent-tree.talent-tree.node-requires-connection": "This node requires a connected node to be unlocked first",
+  "daggerheart-talent-tree.talent-tree.view-info": "View Information",
+  "daggerheart-talent-tree.talent-tree.edit-card": "Edit Card",
+  "daggerheart-talent-tree.talent-tree.create-card": "Create Card",
+  "daggerheart-talent-tree.talent-tree.card-added-from-compendium": "Card \"{card}\" added from compendium and associated with node!",
+  "daggerheart-talent-tree.talent-tree.card-saved-for-unlock": "Card \"{card}\" saved to node! Will be added to character when node is unlocked.",
+  "daggerheart-talent-tree.select-domain.title": "Select Domain",
+  "daggerheart-talent-tree.select-domain.select-domain": "Select a Domain",
+  "daggerheart-talent-tree.select-domain.select-domain-help": "Choose a domain to add to the talent tree. Only domains allowed by the player's class are shown.",
+  "daggerheart-talent-tree.select-domain.no-domains": "No domains available for this player's class.",
+  "daggerheart-talent-tree.select-domain.cancel": "Cancel",
+  "daggerheart-talent-tree.select-domain.permission-error": "You don't have permission to select domains"
 }

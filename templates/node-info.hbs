@@ -1,23 +1,26 @@
 <div class="node-info-container">
   <div class="node-info-header">
+    <h2 class="node-info-title">{{node.name}}</h2>
+  </div>
+  
+  <div class="node-info-body">
     {{#if node.image}}
     <div class="node-info-image-wrapper">
       <img src="{{node.image}}" alt="{{node.name}}" class="node-info-image" />
     </div>
+    <div class="node-info-separator"></div>
     {{/if}}
-    <h2 class="node-info-title">{{node.name}}</h2>
-  </div>
-  
-  <div class="node-info-content">
-    {{#if node.description}}
-    <div class="node-info-description">
-      {{{node.description}}}
+    <div class="node-info-content">
+      {{#if node.description}}
+      <div class="node-info-description">
+        {{{node.description}}}
+      </div>
+      {{else}}
+      <div class="node-info-description">
+        <em>Sem descrição disponível.</em>
+      </div>
+      {{/if}}
     </div>
-    {{else}}
-    <div class="node-info-description">
-      <em>Sem descrição disponível.</em>
-    </div>
-    {{/if}}
   </div>
 </div>
 

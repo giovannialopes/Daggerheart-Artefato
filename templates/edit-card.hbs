@@ -1,40 +1,75 @@
 <div class="edit-card-container">
   <form class="edit-card-form">
-    <!-- Zona de arrastar carta -->
-    <div class="card-drop-zone">
-      <img id="card-image-preview" src="{{cardData.img}}" alt="{{cardData.name}}" />
-    </div>
-
-    <div class="form-group">
-      <label for="card-name">{{i18n.cardName}}:</label>
-      <input type="text" id="card-name" name="name" value="{{cardData.name}}" placeholder="Nome da Carta" required />
-    </div>
-    
-    <div class="form-group">
-      <label for="card-image-url">{{i18n.cardImage}}:</label>
-      <div class="image-url-input-group">
-        <input type="text" id="card-image-url" name="img" value="{{cardData.img}}" placeholder="https://exemplo.com/imagem.png ou caminho local (ex: systems/daggerheart/...)" />
-        <button type="button" class="browse-image-button" title="{{i18n.browseImage}}">
-          <i class="fas fa-folder-open"></i>
-        </button>
-        <button type="button" class="load-image-button" title="{{i18n.loadImage}}">
-          <i class="fas fa-download"></i>
-        </button>
+    <!-- Linha 1: Zona de Drop | Nome da Carta | Recall Cost -->
+    <div class="form-row form-row-1">
+      <div class="form-group form-group-drop">
+        <div class="click-here-overlay">
+          <span class="click-here-text">Clique Aqui!</span>
+        </div>
+        <div class="card-drop-zone">
+          <img id="card-image-preview" src="{{cardData.img}}" alt="{{cardData.name}}" />
+        </div>
+      </div>
+      <div class="form-group form-group-name">
+        <label for="card-name">{{i18n.cardName}}:</label>
+        <input type="text" id="card-name" name="name" value="{{cardData.name}}" placeholder="Nome da Carta" required {{#unless hasCardData}}disabled{{/unless}} />
+      </div>
+      <div class="form-group form-group-recall">
+        <label for="card-recall-cost">{{i18n.recallCost}}:</label>
+        <input type="number" id="card-recall-cost" name="recallCost" value="{{cardData.recallCost}}" placeholder="0" min="0" step="1" {{#unless hasCardData}}disabled{{/unless}} />
       </div>
     </div>
-    
-    <div class="form-group">
-      <label for="card-description">{{i18n.cardDescription}}:</label>
-      <textarea id="card-description" name="description" rows="6" placeholder="Descrição da carta...">{{cardData.description}}</textarea>
+
+    <!-- Linha 2: Imagem -->
+    <div class="form-row form-row-2">
+      <div class="form-group form-group-image">
+        <label for="card-image-url">{{i18n.cardImage}}:</label>
+        <div class="image-url-input-group">
+          <input type="text" id="card-image-url" name="img" value="{{cardData.img}}" placeholder="Caminho da imagem..." {{#unless hasCardData}}disabled{{/unless}} />
+          <button type="button" class="browse-image-button" title="{{i18n.browseImage}}" {{#unless hasCardData}}disabled{{/unless}}>
+            <i class="fas fa-folder-open"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Linha 3: Descrição | Actions -->
+    <div class="form-row form-row-3">
+      <div class="form-group form-group-description">
+        <label for="card-description">{{i18n.cardDescription}}:</label>
+        <textarea id="card-description" name="description" rows="10" placeholder="Descrição da carta..." {{#unless hasCardData}}disabled{{/unless}}>{{cardData.description}}</textarea>
+      </div>
+      {{#if hasCardData}}
+      <div class="form-group form-group-actions actions-group">
+        <label>{{i18n.actions}}:</label>
+        <div class="actions-list">
+          {{#if hasActions}}
+            {{#each actions as |action|}}
+              <div class="action-item" data-action-id="{{action.id}}">
+                <img class="action-icon" src="{{action.img}}" alt="{{action.name}}" />
+                <span class="action-name">{{action.name}}</span>
+                <div class="action-controls">
+                  <button type="button" class="edit-action-button" data-action-id="{{action.id}}" title="{{i18n.editAction}}">
+                    <i class="fas fa-edit"></i>
+                  </button>
+                </div>
+              </div>
+            {{/each}}
+          {{else}}
+            <div class="no-actions-message">{{i18n.noActions}}</div>
+          {{/if}}
+        </div>
+      </div>
+      {{/if}}
     </div>
     
     <div class="form-actions">
       <button type="button" class="cancel-card-button">
         <i class="fas fa-times"></i> {{i18n.cancel}}
       </button>
-            <button type="submit" class="save-card-button">
-              <i class="fas fa-save"></i> {{i18n.save}}
-            </button>
+      <button type="submit" class="save-card-button">
+        <i class="fas fa-save"></i> {{i18n.save}}
+      </button>
     </div>
   </form>
 </div>

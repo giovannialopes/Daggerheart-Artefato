@@ -13,7 +13,7 @@ export class NodeInfoApplication extends HandlebarsApplicationMixin(ApplicationV
       minimizable: true,
     },
     position: {
-      width: 600,
+      width: 1000,
       height: 700,
     },
   };

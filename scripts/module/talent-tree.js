@@ -34,6 +34,7 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     this.isGM = game.user.isGM;
     this.isOwner = actor.isOwner;
     this._drawConnectionsTimeout = null; // Para debounce das chamadas
+    this._pendingScrollPosition = null; // Para restaurar scroll após render
   }
 
   static async openForActor(actor) {
@@ -65,7 +66,6 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
 
   async _prepareContext(options) {
     const talentTreeData = this.getTalentTreeData();
-    const allDomains = this.getAllAvailableDomains();
     
     // Calcular nós disponíveis para cada domínio
     const allAvailableNodes = [];
@@ -132,7 +132,6 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       actor: this.actor,
       actorName: this.actor.name,
       talentTree: processedTalentTreeData,
-      allDomains: allDomains,
       isGM: this.isGM,
       isOwner: this.isOwner,
       canEdit: this.isGM, // Apenas GM pode editar
@@ -162,17 +161,24 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       treeData = {
         domains: [],
         unlockedNodes: [],
-        currentLevel: 1,
-        maxLevel: 7,
+        currentLevel: 0,
+        maxLevel: 11,
       };
     }
     
     // Garantir que currentLevel e maxLevel existam
     if (treeData.currentLevel === undefined) {
-      treeData.currentLevel = 1;
+      treeData.currentLevel = 0;
     }
-    if (treeData.maxLevel === undefined) {
-      treeData.maxLevel = 7;
+    // Atualizar maxLevel para 11 (migração de versões antigas)
+    if (treeData.maxLevel === undefined || treeData.maxLevel < 11) {
+      treeData.maxLevel = 11;
+      // Salvar automaticamente a atualização
+      if (this.actor.isOwner) {
+        this.actor.setFlag(MODULE_ID, "talentTree", treeData).catch(() => {
+          // Se falhar, continuar
+        });
+      }
     }
     
     return treeData;
@@ -182,6 +188,11 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
   getAvailableNodes(domain) {
     const talentTreeData = this.getTalentTreeData();
     const availableNodes = [];
+    
+    // Se o nível for 0, não há nós disponíveis (apenas visualização)
+    if (talentTreeData.currentLevel === 0) {
+      return availableNodes;
+    }
     
     // Se não há nós desbloqueados, o primeiro nó (sem conexões de entrada) está disponível
     if (talentTreeData.unlockedNodes.length === 0) {
@@ -289,10 +300,36 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
 
   getAllAvailableDomains() {
     // Obter todos os domínios do sistema (padrão + homebrew)
+    let allDomains = {};
     if (CONFIG.DH?.DOMAIN?.allDomains) {
-      return CONFIG.DH.DOMAIN.allDomains();
+      allDomains = CONFIG.DH.DOMAIN.allDomains();
     }
-    return {};
+    
+    // Filtrar domínios baseado na classe do jogador
+    try {
+      const playerDomains = this.actor.system?.domains || [];
+      
+      if (Array.isArray(playerDomains) && playerDomains.length > 0) {
+        // Criar um objeto filtrado contendo apenas os domínios da classe do jogador
+        const filteredDomains = {};
+        playerDomains.forEach(domainId => {
+          if (allDomains[domainId]) {
+            filteredDomains[domainId] = allDomains[domainId];
+          }
+        });
+        
+        // Se encontrou domínios filtrados, retornar apenas eles
+        if (Object.keys(filteredDomains).length > 0) {
+          return filteredDomains;
+        }
+      }
+    } catch (error) {
+      console.warn(`[${MODULE_ID}] Erro ao filtrar domínios por classe:`, error);
+      // Se houver erro, retornar todos os domínios
+    }
+    
+    // Se não há classe definida ou não há domínios filtrados, retornar todos
+    return allDomains;
   }
 
   async saveTalentTreeData(data) {
@@ -326,6 +363,25 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     this._attachListeners();
     // Usar debounce para evitar múltiplas chamadas
     this._scheduleDrawConnections();
+    
+    // Restaurar posição de scroll se houver uma pendente
+    if (this._pendingScrollPosition !== null) {
+      const scrollPosition = this._pendingScrollPosition;
+      this._pendingScrollPosition = null;
+      
+      // Usar múltiplos requestAnimationFrame para garantir que o DOM foi completamente atualizado
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const $windowContent = $(this.element).closest(".window-content");
+          const $content = $windowContent.find(".talent-tree-content");
+          
+          if ($content.length > 0 && scrollPosition > 0) {
+            $content.scrollTop(scrollPosition);
+            console.log(`${MODULE_ID} | [ON_RENDER] Posição de scroll restaurada: ${scrollPosition}`);
+          }
+        });
+      });
+    }
   }
   
   _scheduleDrawConnections() {
@@ -720,29 +776,35 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
         e.stopPropagation();
         this._onNodeContextMenu(e);
       });
-    } else {
-      // Jogador: clique direito para ver informações
-      $element.find(".talent-node").off("contextmenu").on("contextmenu", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const $wrapper = $(e.currentTarget).closest(".talent-node-wrapper");
-        const nodeId = $wrapper.data("node-id");
-        if (!nodeId) return;
-        
-        const $domainSection = $wrapper.closest(".domain-section");
-        const domainId = $domainSection.data("domain-id");
-        if (!domainId) return;
-        
-        const talentTreeData = this.getTalentTreeData();
-        const domain = talentTreeData.domains.find(d => d.id === domainId);
-        if (!domain) return;
-        
-        const node = domain.nodes.find(n => n.id === nodeId);
-        if (!node) return;
-        
-        this._showNodeInfo(node, domain);
-      });
     }
+    
+    // Clique direito: GM tem menu de contexto, jogador apenas visualiza
+    $element.find(".talent-node").off("contextmenu").on("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const $wrapper = $(e.currentTarget).closest(".talent-node-wrapper");
+      const nodeId = $wrapper.data("node-id");
+      if (!nodeId) return;
+      
+      const $domainSection = $wrapper.closest(".domain-section");
+      const domainId = $domainSection.data("domain-id");
+      if (!domainId) return;
+      
+      const talentTreeData = this.getTalentTreeData();
+      const domain = talentTreeData.domains.find(d => d.id === domainId);
+      if (!domain) return;
+      
+      const node = domain.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      
+      // Se for GM, mostrar menu de contexto com opções
+      if (this.isGM) {
+        this._showNodeContextMenu(e, node, domain, domainId);
+      } else {
+        // Jogador: apenas visualizar informações
+        this._showNodeInfo(node, domain);
+      }
+    });
 
     // Listener para criar árvore (apenas GM)
     $element.find(".create-tree-button").off("click").on("click", this._onCreateTree.bind(this));
@@ -759,14 +821,18 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     event.preventDefault();
     if (!this.isGM) return;
 
-    const $element = this.element instanceof jQuery ? this.element : $(this.element);
-    const domainSelect = $element.find("#domain-select");
-    const selectedDomainId = domainSelect.val();
-
-    if (!selectedDomainId) {
-      ui.notifications.warn(game.i18n.localize(`${MODULE_ID}.talent-tree.select-domain`));
-      return;
+    // Abrir tela de seleção de domínios
+    try {
+      const { SelectDomainApplication } = await import("./select-domain.js");
+      await SelectDomainApplication.open(this);
+    } catch (error) {
+      ui.notifications.error(`Erro ao abrir seleção de domínios: ${error.message}`);
+      console.error(`[${MODULE_ID}] Erro ao abrir seleção de domínios:`, error);
     }
+  }
+
+  async _addDomainToTree(selectedDomainId) {
+    if (!this.isGM) return;
 
     const talentTreeData = this.getTalentTreeData();
     const allDomains = this.getAllAvailableDomains();
@@ -798,7 +864,6 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     ui.notifications.info(
       game.i18n.format(`${MODULE_ID}.talent-tree.domain-added`, { domain: domainLabel })
     );
-    domainSelect.val(""); // Limpar seleção
   }
 
   async _onRemoveDomain(event) {
@@ -819,7 +884,329 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     ui.notifications.info(game.i18n.localize(`${MODULE_ID}.talent-tree.domain-removed`));
   }
 
+  async _showNodeContextMenu(event, node, domain, domainId) {
+    // Remover menu anterior se existir
+    const existingMenu = document.querySelector(`.${MODULE_ID}-node-context-menu`);
+    if (existingMenu) {
+      existingMenu.remove();
+    }
+
+    // Criar menu de contexto HTML
+    const menu = document.createElement("div");
+    menu.className = `${MODULE_ID}-node-context-menu`;
+    menu.style.cssText = `
+      position: fixed;
+      left: ${event.clientX}px;
+      top: ${event.clientY}px;
+      background: rgba(0, 0, 0, 0.9);
+      border: 1px solid #666;
+      border-radius: 4px;
+      padding: 4px 0;
+      z-index: 10000;
+      min-width: 180px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    `;
+
+    // Opção 1: Ver Informações
+    const viewOption = document.createElement("div");
+    viewOption.className = "context-menu-item";
+    viewOption.style.cssText = `
+      padding: 8px 16px;
+      cursor: pointer;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    `;
+    viewOption.innerHTML = `<i class="fas fa-info-circle"></i> ${game.i18n.localize(`${MODULE_ID}.talent-tree.view-info`)}`;
+    viewOption.addEventListener("click", async () => {
+      menu.remove();
+      await this._showNodeInfo(node, domain);
+    });
+    viewOption.addEventListener("mouseenter", () => {
+      viewOption.style.background = "rgba(255, 255, 255, 0.1)";
+    });
+    viewOption.addEventListener("mouseleave", () => {
+      viewOption.style.background = "transparent";
+    });
+    menu.appendChild(viewOption);
+
+    // Opção 2: Criar/Editar Carta
+    const hasCard = !!node.domainCardUuid;
+    const cardOption = document.createElement("div");
+    cardOption.className = "context-menu-item";
+    cardOption.style.cssText = `
+      padding: 8px 16px;
+      cursor: pointer;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    `;
+    // Mostrar "Editar Carta" se já existe carta, senão "Criar Carta"
+    const cardOptionText = hasCard 
+      ? game.i18n.localize(`${MODULE_ID}.talent-tree.edit-card`)
+      : game.i18n.localize(`${MODULE_ID}.talent-tree.create-card`);
+    const cardOptionIcon = hasCard ? "fas fa-edit" : "fas fa-plus";
+    cardOption.innerHTML = `<i class="${cardOptionIcon}"></i> ${cardOptionText}`;
+    cardOption.addEventListener("click", async () => {
+      menu.remove();
+      await this._onEditCard(node, domainId);
+    });
+    cardOption.addEventListener("mouseenter", () => {
+      cardOption.style.background = "rgba(255, 255, 255, 0.1)";
+    });
+    cardOption.addEventListener("mouseleave", () => {
+      cardOption.style.background = "transparent";
+    });
+    menu.appendChild(cardOption);
+
+    // Opção 3: Excluir Carta (apenas se tiver carta associada)
+    if (node.domainCardUuid) {
+      const deleteOption = document.createElement("div");
+      deleteOption.className = "context-menu-item";
+      deleteOption.style.cssText = `
+        padding: 8px 16px;
+        cursor: pointer;
+        color: #ff6b6b;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        margin-top: 4px;
+        padding-top: 12px;
+      `;
+      deleteOption.innerHTML = `<i class="fas fa-trash"></i> ${game.i18n.localize(`${MODULE_ID}.talent-tree.delete-card`)}`;
+      deleteOption.addEventListener("click", async () => {
+        menu.remove();
+        await this._onDeleteCard(node, domainId);
+      });
+      deleteOption.addEventListener("mouseenter", () => {
+        deleteOption.style.background = "rgba(255, 107, 107, 0.2)";
+      });
+      deleteOption.addEventListener("mouseleave", () => {
+        deleteOption.style.background = "transparent";
+      });
+      menu.appendChild(deleteOption);
+    }
+
+    // Adicionar ao body
+    document.body.appendChild(menu);
+
+    // Fechar menu ao clicar fora ou pressionar ESC
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target) || e.key === "Escape") {
+        menu.remove();
+        document.removeEventListener("click", closeMenu);
+        document.removeEventListener("keydown", closeMenu);
+      }
+    };
+
+    // Aguardar um frame para não fechar imediatamente
+    setTimeout(() => {
+      document.addEventListener("click", closeMenu);
+      document.addEventListener("keydown", closeMenu);
+    }, 0);
+  }
+
+  async _onDeleteCard(node, domainId) {
+    if (!this.isGM) return;
+    if (!node.domainCardUuid) {
+      ui.notifications.warn(
+        game.i18n.localize(`${MODULE_ID}.talent-tree.no-card-to-delete`)
+      );
+      return;
+    }
+
+    // Confirmar exclusão
+    const confirmed = await foundry.applications.api.DialogV2.confirm({
+      window: {
+        title: game.i18n.localize(`${MODULE_ID}.talent-tree.delete-card-confirm-title`),
+      },
+      content: game.i18n.localize(`${MODULE_ID}.talent-tree.delete-card-confirm-text`),
+    });
+
+    if (!confirmed) return;
+
+    try {
+      // Buscar o item pelo UUID
+      const item = await foundry.utils.fromUuid(node.domainCardUuid);
+      let itemName = item?.name || "Carta";
+      
+      if (item) {
+        // Verificar se o item está no personagem atual
+        const actorItem = this.actor.items.get(item.id);
+        
+        if (actorItem) {
+          // Excluir do personagem
+          await this.actor.deleteEmbeddedDocuments("Item", [item.id]);
+          ui.notifications.info(
+            game.i18n.format(`${MODULE_ID}.talent-tree.card-deleted-from-character`, { name: itemName })
+          );
+        }
+      }
+
+      // Remover associação do nó
+      const talentTreeData = this.getTalentTreeData();
+      const domain = talentTreeData.domains.find(d => d.id === domainId);
+      if (domain) {
+        const nodeToUpdate = domain.nodes.find(n => n.id === node.id);
+        if (nodeToUpdate) {
+          delete nodeToUpdate.domainCardUuid;
+          delete nodeToUpdate.domainCardData;
+          delete nodeToUpdate.domainCardDescription;
+          // Limpar também o label e icon se vieram da carta
+          if (nodeToUpdate.label && nodeToUpdate.label === item?.name) {
+            nodeToUpdate.label = nodeToUpdate.id; // Restaurar ID como label padrão
+          }
+          if (nodeToUpdate.icon && nodeToUpdate.icon === item?.img) {
+            nodeToUpdate.icon = null; // Limpar ícone
+          }
+          
+          await this.saveTalentTreeData(talentTreeData);
+          this.render(false);
+          
+          ui.notifications.info(
+            game.i18n.localize(`${MODULE_ID}.talent-tree.card-deleted-from-tree`)
+          );
+        }
+      }
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Erro ao excluir carta:`, error);
+      ui.notifications.error(
+        game.i18n.format(`${MODULE_ID}.talent-tree.delete-card-error`, { error: error.message })
+      );
+    }
+  }
+
+  async _onEditCard(node, domainId) {
+    // Verificar se já existe uma carta associada a este nó
+    let cardData = null;
+    if (node.domainCardUuid) {
+      try {
+        const item = await foundry.utils.fromUuid(node.domainCardUuid);
+        // Verificar se o item ainda existe e pertence ao personagem
+        if (item && this.actor.items.has(item.id)) {
+          cardData = item;
+        } else {
+          // Carta não existe mais, limpar referência
+          const talentTreeData = this.getTalentTreeData();
+          delete node.domainCardUuid;
+          await this.saveTalentTreeData(talentTreeData);
+        }
+      } catch (error) {
+        // Carta não existe mais, limpar referência
+        const talentTreeData = this.getTalentTreeData();
+        delete node.domainCardUuid;
+        await this.saveTalentTreeData(talentTreeData);
+      }
+    }
+
+    // Abrir a tela de edição/criação de carta com referência ao nó
+    await EditCardApplication.open(this.actor, cardData, node, domainId, this);
+  }
+
+  async _associateCardFromCompendium(item, node, domainId) {
+    try {
+      const talentTreeData = this.getTalentTreeData();
+      const domain = talentTreeData.domains.find(d => d.id === domainId);
+      if (!domain) return;
+
+      const nodeToUpdate = domain.nodes.find(n => n.id === node.id);
+      if (!nodeToUpdate) return;
+
+      // Criar uma cópia da carta no personagem
+      const itemData = foundry.utils.deepClone(item.toObject());
+      
+      // Preservar effects e actions
+      let effectsArray = [];
+      if (item.effects) {
+        if (item.effects instanceof foundry.utils.Collection || item.effects.size !== undefined) {
+          effectsArray = Array.from(item.effects.values()).map(effect => {
+            try {
+              return effect.toObject();
+            } catch (e) {
+              console.error(`[${MODULE_ID}] Erro ao converter effect:`, e);
+              return {
+                name: effect.name,
+                img: effect.img,
+                description: effect.description,
+                changes: effect.changes || [],
+                duration: effect.duration || {},
+                disabled: effect.disabled || false,
+                origin: effect.origin,
+                transfer: effect.transfer,
+                system: effect.system || {}
+              };
+            }
+          });
+        } else if (Array.isArray(item.effects)) {
+          effectsArray = foundry.utils.deepClone(item.effects);
+        }
+      }
+
+      // Verificar se o nó está desbloqueado
+      const isNodeUnlocked = talentTreeData.unlockedNodes.includes(node.id);
+
+      if (isNodeUnlocked) {
+        // Se o nó está desbloqueado, criar o item no personagem
+        const createdItems = await Item.create([itemData], { parent: this.actor });
+        const createdItem = createdItems[0];
+        
+        if (createdItem && effectsArray.length > 0) {
+          await createdItem.createEmbeddedDocuments("ActiveEffect", effectsArray);
+        }
+
+        // Associar a carta ao nó
+        nodeToUpdate.domainCardUuid = createdItem.uuid;
+        nodeToUpdate.label = createdItem.name;
+        nodeToUpdate.icon = createdItem.img;
+        nodeToUpdate.isImage = true;
+
+        // Obter descrição
+        if (createdItem.system && createdItem.system.description) {
+          if (typeof createdItem.system.description === "object" && createdItem.system.description.value !== undefined) {
+            nodeToUpdate.description = createdItem.system.description.value;
+          } else {
+            nodeToUpdate.description = createdItem.system.description;
+          }
+        }
+
+        ui.notifications.info(
+          game.i18n.format(`${MODULE_ID}.talent-tree.card-added-from-compendium`, { card: createdItem.name })
+        );
+      } else {
+        // Se o nó não está desbloqueado, salvar os dados para criar depois
+        nodeToUpdate.domainCardData = itemData;
+        nodeToUpdate.domainCardName = itemData.name;
+        nodeToUpdate.domainCardImg = itemData.img;
+        nodeToUpdate._preservedEffects = effectsArray;
+        nodeToUpdate.isImage = true;
+
+        // Obter descrição
+        if (itemData.system && itemData.system.description) {
+          if (typeof itemData.system.description === "object" && itemData.system.description.value !== undefined) {
+            nodeToUpdate.domainCardDescription = itemData.system.description.value;
+          } else {
+            nodeToUpdate.domainCardDescription = itemData.system.description;
+          }
+        }
+
+        ui.notifications.info(
+          game.i18n.format(`${MODULE_ID}.talent-tree.card-saved-for-unlock`, { card: itemData.name })
+        );
+      }
+
+      await this.saveTalentTreeData(talentTreeData);
+      await this.render(false);
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Erro ao associar carta do compendium:`, error);
+      ui.notifications.error('Erro ao associar a carta ao nó.');
+    }
+  }
+
   async _onNodeContextMenu(event) {
+    // Este método ainda é usado pelos listeners antigos, mas agora apenas abre as informações
     event.preventDefault();
     event.stopPropagation();
     if (!this.isGM) return;
@@ -828,9 +1215,9 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     const $target = $(event.currentTarget);
     let $wrapper = $target.closest(".talent-node-wrapper");
     
-      if ($wrapper.length === 0) {
-        return;
-      }
+    if ($wrapper.length === 0) {
+      return;
+    }
 
     const nodeId = $wrapper.data("node-id");
     if (!nodeId) return;
@@ -847,28 +1234,8 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     const node = domain.nodes.find(n => n.id === nodeId);
     if (!node) return;
 
-    // Verificar se já existe uma carta associada a este nó
-    let cardData = null;
-    if (node.domainCardUuid) {
-      try {
-        const item = await foundry.utils.fromUuid(node.domainCardUuid);
-        // Verificar se o item ainda existe e pertence ao personagem
-        if (item && this.actor.items.has(item.id)) {
-          cardData = item;
-        } else {
-          // Carta não existe mais, limpar referência
-          delete node.domainCardUuid;
-          await this.saveTalentTreeData(talentTreeData);
-        }
-      } catch (error) {
-        // Carta não existe mais, limpar referência
-        delete node.domainCardUuid;
-        await this.saveTalentTreeData(talentTreeData);
-      }
-    }
-
-    // Abrir a tela de edição/criação de carta com referência ao nó
-    EditCardApplication.open(this.actor, cardData, node, domainId, this);
+    // Abrir informações do nó (GM também pode visualizar)
+    this._showNodeInfo(node, domain);
   }
 
   async _onIncreaseLevel(event) {
@@ -885,9 +1252,9 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     if (talentTreeData.currentLevel < talentTreeData.maxLevel) {
       talentTreeData.currentLevel++;
       await this.saveTalentTreeData(talentTreeData);
-      ui.notifications.info(`Nível aumentado para ${talentTreeData.currentLevel}/${talentTreeData.maxLevel}`);
+      // Notificação removida conforme solicitado
     } else {
-      ui.notifications.warn(`Você já está no nível máximo (${talentTreeData.maxLevel})`);
+      // Notificação removida conforme solicitado
     }
   }
 
@@ -902,8 +1269,17 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     
     const talentTreeData = this.getTalentTreeData();
     
-    if (talentTreeData.currentLevel > 1) {
+    if (talentTreeData.currentLevel > 0) {
       const newLevel = talentTreeData.currentLevel - 1;
+      
+      // Se está voltando para o nível 0, remover todos os nós desbloqueados
+      if (newLevel === 0) {
+        talentTreeData.unlockedNodes = [];
+        talentTreeData.currentLevel = 0;
+        await this.saveTalentTreeData(talentTreeData);
+        this.render(false);
+        return;
+      }
       
       // Se está voltando para o nível 1, manter apenas o primeiro nó de cada domínio
       if (newLevel === 1) {
@@ -989,9 +1365,9 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       
       talentTreeData.currentLevel = newLevel;
       await this.saveTalentTreeData(talentTreeData);
-      ui.notifications.info(`Nível diminuído para ${talentTreeData.currentLevel}/${talentTreeData.maxLevel}`);
+      // Notificação removida conforme solicitado
     } else {
-      ui.notifications.warn(`Você já está no nível mínimo (1)`);
+      // Notificação removida conforme solicitado
     }
   }
 
@@ -1015,20 +1391,16 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     const node = domain.nodes.find(n => n.id === nodeId);
     if (!node) return;
     
-    // Se não é GM
+    // Clique direito: sempre mostrar informações do nó (GM e jogador, independente do estado)
+    if (event.button === 2 || event.which === 3) {
+      this._showNodeInfo(node, domain);
+      return;
+    }
+    
+    // Clique esquerdo: lógica de desbloquear/bloquear
     if (!this.isGM) {
-      // Clique direito: mostrar informações do nó
-      if (event.button === 2 || event.which === 3) {
-        this._showNodeInfo(node, domain);
-        return;
-      }
-      // Clique esquerdo: apenas permitir desbloquear (não pode bloquear)
+      // Jogador: apenas permitir desbloquear (não pode bloquear)
       // A lógica de bloqueio será pulada abaixo
-    } else {
-      // GM: clique direito abre menu de contexto
-      if (event.button === 2 || event.which === 3) {
-        return; // O menu de contexto será tratado pelo _onNodeContextMenu
-      }
     }
 
     const index = talentTreeData.unlockedNodes.indexOf(nodeId);
@@ -1045,13 +1417,13 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       
       // Verificar restrições
       
-      // 1. Verificar se é o primeiro nó - não pode ser bloqueado (exceto quando nível volta para 1)
+      // 1. Verificar se é o primeiro nó - não pode ser bloqueado (exceto quando nível volta para 0 ou 1)
       const firstNodeId = this.getFirstNode(domain);
       if (nodeId === firstNodeId) {
-        // Só pode bloquear o primeiro nó se o nível for 1
+        // Só pode bloquear o primeiro nó se o nível for 0 ou 1
         if (talentTreeData.currentLevel > 1) {
           ui.notifications.warn(
-            `O primeiro nó não pode ser bloqueado. Diminua o nível para 1 para resetar todos os nós.`
+            `O primeiro nó não pode ser bloqueado. Diminua o nível para 1 ou 0 para resetar todos os nós.`
           );
           return;
         }
@@ -1078,6 +1450,14 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       }
     } else {
       // DESBLOQUEAR NÓ - Jogadores e GM podem desbloquear
+      // Se o nível for 0, não pode desbloquear nenhum nó (apenas visualização)
+      if (talentTreeData.currentLevel === 0) {
+        ui.notifications.warn(
+          game.i18n.localize(`${MODULE_ID}.talent-tree.cannot-unlock-at-level-zero`)
+        );
+        return;
+      }
+      
       // Verificar se o nó está disponível para desbloqueio
       const availableNodes = this.getAvailableNodes(domain);
       
@@ -1157,6 +1537,17 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
 
     await this.saveTalentTreeData(talentTreeData);
     
+    // Salvar posição de scroll antes do render
+    // O elemento scrollável é .talent-tree-content dentro da janela
+    const $windowContent = $(this.element).closest(".window-content");
+    const $content = $windowContent.find(".talent-tree-content");
+    const scrollPosition = $content.length > 0 ? $content.scrollTop() : 0;
+    
+    console.log(`${MODULE_ID} | [TOGGLE NODE] Posição de scroll salva: ${scrollPosition}`);
+    
+    // Armazenar posição de scroll para restaurar no _onRender
+    this._pendingScrollPosition = scrollPosition;
+    
     // Renderizar novamente para atualizar o estado visual dos nós
     console.log(`${MODULE_ID} | [TOGGLE NODE] Nó ${nodeId} ${isUnlocking ? 'desbloqueado' : 'bloqueado'}. Renderizando aplicação...`);
     await this.render(false);
@@ -1170,12 +1561,33 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     let cardData = null;
     let cardName = node.label;
     let cardImage = node.icon || "";
-    let cardDescription = node.description || "";
+    let cardDescription = node.description || node.domainCardDescription || "";
+    
+    console.log(`[${MODULE_ID}] _showNodeInfo - Node data:`, {
+      id: node.id,
+      label: node.label,
+      icon: node.icon,
+      description: node.description,
+      domainCardUuid: node.domainCardUuid,
+      domainCardDescription: node.domainCardDescription,
+      domainCardName: node.domainCardName,
+      domainCardImg: node.domainCardImg
+    });
     
     // Tentar carregar a carta associada
     if (node.domainCardUuid) {
       try {
         const item = await foundry.utils.fromUuid(node.domainCardUuid);
+        console.log(`[${MODULE_ID}] _showNodeInfo - Item carregado:`, {
+          id: item?.id,
+          name: item?.name,
+          img: item?.img,
+          hasSystem: !!item?.system,
+          description: item?.system?.description,
+          descriptionValue: item?.system?.description?.value,
+          isInActor: item ? this.actor.items.has(item.id) : false
+        });
+        
         if (item && this.actor.items.has(item.id)) {
           cardData = item;
           cardName = item.name;
@@ -1188,19 +1600,29 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
             } else {
               cardDescription = item.system.description;
             }
+          } else if (!cardDescription) {
+            // Se não tem descrição no item, usar a do nó
+            cardDescription = node.description || node.domainCardDescription || "";
           }
         }
       } catch (error) {
         // Carta não encontrada, usar dados do nó
+        console.warn(`[${MODULE_ID}] Erro ao carregar carta do nó:`, error);
       }
     }
     
-    // Se não tem carta, usar dados do nó
+    // Se não tem carta, usar dados do nó (com fallback para domainCardDescription)
     if (!cardData) {
-      cardName = node.label;
-      cardImage = node.icon || "";
-      cardDescription = node.description || "";
+      cardName = node.label || node.domainCardName || "";
+      cardImage = node.icon || node.domainCardImg || "";
+      cardDescription = node.description || node.domainCardDescription || "";
     }
+    
+    console.log(`[${MODULE_ID}] _showNodeInfo - Dados finais para exibição:`, {
+      name: cardName,
+      image: cardImage,
+      description: cardDescription
+    });
     
     // Preparar dados para a Application
     const nodeInfoData = {
@@ -1224,34 +1646,40 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
 
     if (!domain) return;
 
-    // Criar estrutura inicial da árvore
-    // Topo -> Centro -> Esquerda/Direita -> Inferiores
+    // Criar estrutura da árvore em formato de diamante/árvore
+    // Row 1: 1 nó (topo)
+    // Row 2: 3 nós
+    // Row 3: 3 nós (left-middle, center, right-middle)
+    // Row 4: 3 nós
+    // Row 5: 1 nó (fundo)
     domain.nodes = [
+      // Row 1 - Nó inicial (topo)
       {
         id: `${domainId}-node-1`,
         label: "Nó Inicial",
-        x: 3, // Coluna central (grid de 5 colunas)
+        x: 3, // Coluna central
         y: 1, // Primeira linha
         icon: "fas fa-star",
-        connections: [`${domainId}-node-2`],
+        connections: [`${domainId}-node-2`, `${domainId}-node-3`, `${domainId}-node-4`],
         direction: "down"
       },
+      // Row 2 - Três nós
       {
         id: `${domainId}-node-2`,
-        label: "Nó Central",
-        x: 3, // Coluna central
-        y: 2, // Segunda linha
-        icon: "fas fa-circle",
-        connections: [`${domainId}-node-3`, `${domainId}-node-4`, `${domainId}-node-6`],
-        direction: "horizontal"
-      },
-      {
-        id: `${domainId}-node-3`,
         label: "Nó Esquerdo",
         x: 1, // Coluna esquerda
         y: 2, // Segunda linha
         icon: "fas fa-circle",
-        connections: [`${domainId}-node-7`],
+        connections: [`${domainId}-node-5`],
+        direction: "down"
+      },
+      {
+        id: `${domainId}-node-3`,
+        label: "Nó Central",
+        x: 3, // Coluna central
+        y: 2, // Segunda linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-6`], // Apenas para o nó central abaixo
         direction: "down"
       },
       {
@@ -1260,33 +1688,72 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
         x: 5, // Coluna direita
         y: 2, // Segunda linha
         icon: "fas fa-circle",
-        connections: [`${domainId}-node-5`],
+        connections: [`${domainId}-node-7`], // Apenas para baixo
+        direction: "down"
+      },
+      // Row 3 - Três nós (alinhados verticalmente com os nós acima) - sem conexões entre eles
+      {
+        id: `${domainId}-node-5`,
+        label: "Nó Esquerdo Inferior",
+        x: 1, // Alinhado com Nó Esquerdo (node-2)
+        y: 3, // Terceira linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-8`], // Apenas para baixo
         direction: "down"
       },
       {
-        id: `${domainId}-node-5`,
-        label: "Nó Inferior",
-        x: 5, // Coluna direita
-        y: 3, // Terceira linha
-        icon: "fas fa-circle",
-        connections: [],
-        direction: "none"
-      },
-      {
         id: `${domainId}-node-6`,
-        label: "Nó Central Inferior",
-        x: 3, // Coluna central
+        label: "Nó Central",
+        x: 3, // Center
         y: 3, // Terceira linha
         icon: "fas fa-circle",
-        connections: [],
-        direction: "none"
+        connections: [`${domainId}-node-9`], // Apenas para o nó central abaixo
+        direction: "down"
       },
       {
         id: `${domainId}-node-7`,
-        label: "Nó Esquerdo Inferior",
-        x: 1, // Coluna esquerda
+        label: "Nó Direito Inferior",
+        x: 5, // Alinhado com Nó Direito (node-4)
         y: 3, // Terceira linha
         icon: "fas fa-circle",
+        connections: [`${domainId}-node-10`], // Apenas para baixo
+        direction: "down"
+      },
+      // Row 4 - Três nós
+      {
+        id: `${domainId}-node-8`,
+        label: "Nó Esquerdo",
+        x: 1, // Coluna esquerda
+        y: 4, // Quarta linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-11`],
+        direction: "down"
+      },
+      {
+        id: `${domainId}-node-9`,
+        label: "Nó Central",
+        x: 3, // Coluna central
+        y: 4, // Quarta linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-11`],
+        direction: "down"
+      },
+      {
+        id: `${domainId}-node-10`,
+        label: "Nó Direito",
+        x: 5, // Coluna direita
+        y: 4, // Quarta linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-11`],
+        direction: "down"
+      },
+      // Row 5 - Nó final (fundo)
+      {
+        id: `${domainId}-node-11`,
+        label: "Nó Final",
+        x: 3, // Coluna central
+        y: 5, // Quinta linha
+        icon: "fas fa-star",
         connections: [],
         direction: "none"
       }
@@ -1322,68 +1789,109 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       (node) => !node.startsWith(`${domainId}-`)
     );
 
-    // Recriar a árvore (mesma função que criar)
+    // Recriar a árvore (mesma estrutura que criar)
     domain.nodes = [
+      // Row 1 - Nó inicial (topo)
       {
         id: `${domainId}-node-1`,
         label: "Nó Inicial",
-        x: 3,
-        y: 1,
+        x: 3, // Coluna central
+        y: 1, // Primeira linha
         icon: "fas fa-star",
-        connections: [`${domainId}-node-2`],
+        connections: [`${domainId}-node-2`, `${domainId}-node-3`, `${domainId}-node-4`],
         direction: "down"
       },
+      // Row 2 - Três nós
       {
         id: `${domainId}-node-2`,
-        label: "Nó Central",
-        x: 3,
-        y: 2,
-        icon: "fas fa-circle",
-        connections: [`${domainId}-node-3`, `${domainId}-node-4`, `${domainId}-node-6`],
-        direction: "horizontal"
-      },
-      {
-        id: `${domainId}-node-3`,
         label: "Nó Esquerdo",
-        x: 1,
-        y: 2,
-        icon: "fas fa-circle",
-        connections: [`${domainId}-node-7`],
-        direction: "down"
-      },
-      {
-        id: `${domainId}-node-4`,
-        label: "Nó Direito",
-        x: 5,
-        y: 2,
+        x: 1, // Coluna esquerda
+        y: 2, // Segunda linha
         icon: "fas fa-circle",
         connections: [`${domainId}-node-5`],
         direction: "down"
       },
       {
-        id: `${domainId}-node-5`,
-        label: "Nó Inferior",
-        x: 5,
-        y: 3,
+        id: `${domainId}-node-3`,
+        label: "Nó Central",
+        x: 3, // Coluna central
+        y: 2, // Segunda linha
         icon: "fas fa-circle",
-        connections: [],
-        direction: "none"
+        connections: [`${domainId}-node-6`], // Apenas para o nó central abaixo
+        direction: "down"
+      },
+      {
+        id: `${domainId}-node-4`,
+        label: "Nó Direito",
+        x: 5, // Coluna direita
+        y: 2, // Segunda linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-7`], // Apenas para baixo
+        direction: "down"
+      },
+      // Row 3 - Três nós (alinhados verticalmente com os nós acima) - sem conexões entre eles
+      {
+        id: `${domainId}-node-5`,
+        label: "Nó Esquerdo Inferior",
+        x: 1, // Alinhado com Nó Esquerdo (node-2)
+        y: 3, // Terceira linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-8`], // Apenas para baixo
+        direction: "down"
       },
       {
         id: `${domainId}-node-6`,
-        label: "Nó Central Inferior",
-        x: 3,
-        y: 3,
+        label: "Nó Central",
+        x: 3, // Center
+        y: 3, // Terceira linha
         icon: "fas fa-circle",
-        connections: [],
-        direction: "none"
+        connections: [`${domainId}-node-9`], // Apenas para o nó central abaixo
+        direction: "down"
       },
       {
         id: `${domainId}-node-7`,
-        label: "Nó Esquerdo Inferior",
-        x: 1,
-        y: 3,
+        label: "Nó Direito Inferior",
+        x: 5, // Alinhado com Nó Direito (node-4)
+        y: 3, // Terceira linha
         icon: "fas fa-circle",
+        connections: [`${domainId}-node-10`], // Apenas para baixo
+        direction: "down"
+      },
+      // Row 4 - Três nós
+      {
+        id: `${domainId}-node-8`,
+        label: "Nó Esquerdo",
+        x: 1, // Coluna esquerda
+        y: 4, // Quarta linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-11`],
+        direction: "down"
+      },
+      {
+        id: `${domainId}-node-9`,
+        label: "Nó Central",
+        x: 3, // Coluna central
+        y: 4, // Quarta linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-11`],
+        direction: "down"
+      },
+      {
+        id: `${domainId}-node-10`,
+        label: "Nó Direito",
+        x: 5, // Coluna direita
+        y: 4, // Quarta linha
+        icon: "fas fa-circle",
+        connections: [`${domainId}-node-11`],
+        direction: "down"
+      },
+      // Row 5 - Nó final (fundo)
+      {
+        id: `${domainId}-node-11`,
+        label: "Nó Final",
+        x: 3, // Coluna central
+        y: 5, // Quinta linha
+        icon: "fas fa-star",
         connections: [],
         direction: "none"
       }
@@ -1397,3 +1905,4 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
     // Implementar se necessário
   }
 }
+

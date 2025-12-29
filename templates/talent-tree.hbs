@@ -1,10 +1,6 @@
 <div class="talent-tree-container">
   <header class="talent-tree-header">
-      <h2>
-      <i class="fas fa-sitemap"></i>
-      {{i18n.title}} - {{actorName}}
-    </h2>
-    <div class="header-controls">
+    <div class="header-left">
       <div class="level-control">
         <label>{{i18n.level}}:</label>
         <div class="level-counter">
@@ -21,18 +17,17 @@
           {{/if}}
         </div>
       </div>
+    </div>
+    <div class="header-center">
+      <h2>
+        {{i18n.title}} - {{actorName}}
+      </h2>
+    </div>
+    <div class="header-right">
       {{#if isGM}}
-      <div class="gm-controls">
-        <select id="domain-select">
-          <option value="">-- {{i18n.selectDomain}} --</option>
-          {{#each allDomains as |domain id|}}
-          <option value="{{id}}">{{localize domain.label}}</option>
-          {{/each}}
-        </select>
-        <button class="add-domain-button" type="button">
-          <i class="fas fa-plus"></i> {{i18n.addDomain}}
-        </button>
-      </div>
+      <button class="add-domain-button" type="button">
+        <i class="fas fa-plus"></i> {{i18n.addDomain}}
+      </button>
       {{/if}}
     </div>
   </header>
@@ -56,8 +51,7 @@
               {{#each domain.nodes as |node|}}
               <div class="talent-node-wrapper" data-node-id="{{node.id}}" style="grid-column: {{node.x}}; grid-row: {{node.y}};">
                 <div class="talent-node {{#if (includes @root.talentTree.unlockedNodes node.id)}}unlocked{{/if}} {{#if (includes @root.talentTree.availableNodes node.id)}}available{{/if}}" 
-                     data-node-id="{{node.id}}"
-                     title="{{node.label}}{{#if node.description}} - {{node.description}}{{/if}}">
+                     data-node-id="{{node.id}}">
                   <div class="node-content">
                     {{#if node.icon}}
                       {{#if node.isImage}}
@@ -93,7 +87,7 @@
       <i class="fas fa-sitemap"></i>
       <p>{{i18n.noDomains}}</p>
       {{#if isGM}}
-      <p>{{i18n.selectDomain}} {{i18n.addDomain}} para começar.</p>
+      <p>Clique em "{{i18n.addDomain}}" para adicionar um domínio à árvore de talentos.</p>
       {{/if}}
     </div>
     {{/if}}
