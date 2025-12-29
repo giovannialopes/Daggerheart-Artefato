@@ -41,7 +41,12 @@
       </div>
       {{#if hasCardData}}
       <div class="form-group form-group-actions actions-group">
-        <label>{{i18n.actions}}:</label>
+        <div class="actions-header">
+          <label>{{i18n.actions}}:</label>
+          <button type="button" class="create-action-button" title="{{i18n.createAction}}">
+            <i class="fas fa-plus"></i> {{i18n.createAction}}
+          </button>
+        </div>
         <div class="actions-list">
           {{#if hasActions}}
             {{#each actions as |action|}}
@@ -51,6 +56,9 @@
                 <div class="action-controls">
                   <button type="button" class="edit-action-button" data-action-id="{{action.id}}" title="{{i18n.editAction}}">
                     <i class="fas fa-edit"></i>
+                  </button>
+                  <button type="button" class="delete-action-button" data-action-id="{{action.id}}" title="{{i18n.deleteAction}}">
+                    <i class="fas fa-trash"></i>
                   </button>
                 </div>
               </div>

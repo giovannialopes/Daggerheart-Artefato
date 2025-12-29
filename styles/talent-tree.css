@@ -1364,8 +1364,37 @@
   margin-top: 1.5rem;
 }
 
-.edit-card-form .form-group.actions-group label {
+.edit-card-form .form-group.actions-group .actions-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
   margin-bottom: 0.75rem;
+}
+
+.edit-card-form .form-group.actions-group .actions-header label {
+  margin: 0;
+}
+
+.edit-card-form .form-group.actions-group .create-action-button {
+  padding: 0.5rem 1rem;
+  background: var(--dh-primary, #f3c267);
+  border: none;
+  color: var(--dh-background, #0a0a0f);
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.edit-card-form .form-group.actions-group .create-action-button:hover {
+  background: var(--dh-secondary, #cc9900);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(243, 194, 103, 0.3);
 }
 
 .actions-list {
@@ -1452,7 +1481,8 @@
   gap: 0.5rem;
 }
 
-.edit-action-button {
+.edit-action-button,
+.delete-action-button {
   background: 
     linear-gradient(135deg, rgba(243, 194, 103, 0.15) 0%, rgba(243, 194, 103, 0.1) 100%);
   border: 2px solid rgba(243, 194, 103, 0.35);
@@ -1470,6 +1500,20 @@
   justify-content: center;
   min-width: 36px;
   height: 36px;
+}
+
+.delete-action-button {
+  background: 
+    linear-gradient(135deg, rgba(244, 67, 54, 0.15) 0%, rgba(244, 67, 54, 0.1) 100%);
+  border-color: rgba(244, 67, 54, 0.35);
+  color: #f44336;
+}
+
+.delete-action-button:hover {
+  background: 
+    linear-gradient(135deg, rgba(244, 67, 54, 0.3) 0%, rgba(244, 67, 54, 0.2) 100%);
+  border-color: rgba(244, 67, 54, 0.5);
+  color: #ffffff;
 }
 
 .edit-action-button:hover {

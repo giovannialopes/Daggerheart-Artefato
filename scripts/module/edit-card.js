@@ -188,6 +188,7 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     super._onRender?.(context, options);
     this._attachListeners();
     this._setupDragAndDrop();
+    this._setupUpdateListener();
     
     // Se já tem dados da carta (edição), habilitar campos
     const hasCardData = this.cardData && (this.cardData.id || this.cardData.name || this.cardData.system);
@@ -207,6 +208,38 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       // Garantir que os campos estão desabilitados
       this._disableFormFields();
     }
+  }
+
+  _setupUpdateListener() {
+    // Remover listener anterior se existir
+    if (this._updateItemHook) {
+      Hooks.off("updateItem", this._updateItemHook);
+      this._updateItemHook = null;
+    }
+
+    // Adicionar listener para atualizar a lista quando o item for atualizado
+    this._updateItemHook = async (item, changes, options, userId) => {
+      // Verificar se é o item que estamos editando
+      if (this.currentItem && item.id === this.currentItem.id && item.parent?.id === this.actor.id) {
+        console.log(`[${MODULE_ID}] Item atualizado, recarregando lista de actions`);
+        // Atualizar currentItem
+        this.currentItem = item;
+        this.cardData = item;
+        // Recarregar apenas a parte de actions do formulário
+        await this.render();
+      }
+    };
+
+    Hooks.on("updateItem", this._updateItemHook);
+  }
+
+  async close(options = {}) {
+    // Remover listener ao fechar
+    if (this._updateItemHook) {
+      Hooks.off("updateItem", this._updateItemHook);
+      this._updateItemHook = null;
+    }
+    return super.close(options);
   }
 
   _attachListeners() {
@@ -241,8 +274,24 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     // Listener para botões de editar action
     $element.find(".edit-action-button").off("click").on("click", async (e) => {
       e.preventDefault();
+      e.stopPropagation();
       const actionId = $(e.currentTarget).data("action-id");
       await this._onEditAction(actionId);
+    });
+
+    // Listener para botão de criar action
+    $element.find(".create-action-button").off("click").on("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await this._onCreateAction();
+    });
+
+    // Listener para botões de deletar action
+    $element.find(".delete-action-button").off("click").on("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const actionId = $(e.currentTarget).data("action-id");
+      await this._onDeleteAction(actionId);
     });
 
     // Listener para botão de procurar imagem (FilePicker do Foundry)
@@ -457,6 +506,58 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       if (action) {
         // Actions no Daggerheart têm um sheet config através do metadata
         try {
+          // Verificar se a action tem um item associado (necessário para ActionConfig)
+          // action.item é um getter que retorna this.parent.parent
+          // Verificar se parent.parent existe antes de tentar acessar action.item
+          if (!action.parent?.parent) {
+            ui.notifications.warn(
+              game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-after-save`) || 
+              "Por favor, salve a carta primeiro antes de editar as actions."
+            );
+            return;
+          }
+          
+          // Verificar se o item da action é o mesmo que currentItem
+          let actionItem = null;
+          try {
+            actionItem = action.item;
+            if (!actionItem || actionItem !== this.currentItem) {
+              // Tentar acessar a action através do item para garantir que está vinculada
+              const itemActions = this.currentItem.system.actions;
+              if (itemActions instanceof foundry.utils.Collection) {
+                action = itemActions.get(actionId);
+              } else if (typeof itemActions === 'object' && itemActions !== null) {
+                for (const [key, a] of Object.entries(itemActions)) {
+                  const id = a._id || a.id || key;
+                  if (id === actionId) {
+                    action = a;
+                    break;
+                  }
+                }
+              }
+              // Verificar novamente se agora tem item
+              if (action.parent?.parent) {
+                actionItem = action.item;
+              }
+            }
+          } catch (e) {
+            console.warn(`[${MODULE_ID}] _onEditAction - Erro ao acessar action.item:`, e);
+            ui.notifications.warn(
+              game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-after-save`) || 
+              "Por favor, salve a carta primeiro antes de editar as actions."
+            );
+            return;
+          }
+          
+          // Se ainda não tem item, avisar que precisa salvar primeiro
+          if (!actionItem) {
+            ui.notifications.warn(
+              game.i18n.localize(`${MODULE_ID}.edit-card.action-edit-after-save`) || 
+              "Por favor, salve a carta primeiro antes de editar as actions."
+            );
+            return;
+          }
+          
           // Tentar acessar o sheet diretamente
           if (action.sheet) {
             console.log(`[${MODULE_ID}] _onEditAction - Abrindo sheet da action`);
@@ -510,6 +611,116 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       game.i18n.localize(`${MODULE_ID}.edit-card.action-not-found`) || 
       "Action não encontrada. Certifique-se de que a carta foi salva primeiro."
     );
+  }
+
+  async _onCreateAction() {
+    console.log(`[${MODULE_ID}] _onCreateAction - Iniciando criação de action`);
+    
+    // Verificar se temos um item existente
+    if (!this.currentItem) {
+      ui.notifications.warn(
+        game.i18n.localize(`${MODULE_ID}.edit-card.action-create-after-save`) || 
+        "Por favor, salve a carta primeiro antes de criar actions."
+      );
+      return;
+    }
+
+    try {
+      // Usar o método Action.create do sistema Daggerheart
+      const ActionClass = game.system.api?.models?.actions?.actionsTypes?.base;
+      if (!ActionClass) {
+        ui.notifications.error("Não foi possível encontrar a classe de Action do sistema.");
+        return;
+      }
+
+      // O parent deve ser o system do item (this.currentItem.system)
+      const newAction = await ActionClass.create({}, {
+        parent: this.currentItem.system,
+        renderSheet: true
+      });
+
+      if (newAction) {
+        console.log(`[${MODULE_ID}] _onCreateAction - Action criada:`, newAction.id);
+        // Recarregar a lista de actions atualizando o formulário
+        await this.render();
+        ui.notifications.info(
+          game.i18n.format(`${MODULE_ID}.edit-card.action-created`, { name: newAction.name }) ||
+          `Action "${newAction.name}" criada com sucesso!`
+        );
+      }
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Erro ao criar action:`, error);
+      ui.notifications.error(`Erro ao criar action: ${error.message}`);
+    }
+  }
+
+  async _onDeleteAction(actionId) {
+    console.log(`[${MODULE_ID}] _onDeleteAction - actionId:`, actionId);
+    
+    // Verificar se temos um item existente
+    if (!this.currentItem) {
+      ui.notifications.warn(
+        game.i18n.localize(`${MODULE_ID}.edit-card.action-delete-after-save`) || 
+        "Por favor, salve a carta primeiro antes de deletar actions."
+      );
+      return;
+    }
+
+    try {
+      // Encontrar a action
+      let action = null;
+      if (this.currentItem.system.actions instanceof foundry.utils.Collection) {
+        action = this.currentItem.system.actions.get(actionId);
+      } else if (typeof this.currentItem.system.actions === 'object' && this.currentItem.system.actions !== null) {
+        for (const [key, a] of Object.entries(this.currentItem.system.actions)) {
+          const id = a._id || a.id || key;
+          if (id === actionId) {
+            action = a;
+            break;
+          }
+        }
+      }
+
+      if (!action) {
+        ui.notifications.warn(`Action não encontrada com id: ${actionId}`);
+        return;
+      }
+
+      // Confirmar deleção
+      const actionName = action.name || "Action";
+      const confirmed = await foundry.applications.api.DialogV2.confirm({
+        window: {
+          title: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.title', {
+            type: game.i18n.localize(`DAGGERHEART.GENERAL.Action.single`),
+            name: actionName
+          }) || `Deletar Action`,
+          content: game.i18n.format('DAGGERHEART.APPLICATIONS.DeleteConfirmation.text', {
+            name: actionName
+          }) || `Tem certeza que deseja deletar "${actionName}"?`
+        }
+      });
+
+      if (!confirmed) {
+        console.log(`[${MODULE_ID}] _onDeleteAction - Deleção cancelada pelo usuário`);
+        return;
+      }
+
+      // Deletar a action usando o método delete()
+      await action.delete();
+      
+      console.log(`[${MODULE_ID}] _onDeleteAction - Action deletada:`, actionId);
+      
+      // Recarregar a lista de actions atualizando o formulário
+      await this.render();
+      
+      ui.notifications.info(
+        game.i18n.format(`${MODULE_ID}.edit-card.action-deleted`, { name: actionName }) ||
+        `Action "${actionName}" deletada com sucesso!`
+      );
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Erro ao deletar action:`, error);
+      ui.notifications.error(`Erro ao deletar action: ${error.message}`);
+    }
   }
 
   _fillFormFromItem(item) {
