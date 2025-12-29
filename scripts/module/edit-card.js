@@ -519,7 +519,9 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     console.log(`[${MODULE_ID}] _onEditAction - actionId:`, actionId);
     console.log(`[${MODULE_ID}] _onEditAction - currentItem:`, this.currentItem);
     console.log(`[${MODULE_ID}] _onEditAction - cardData:`, this.cardData);
+    console.log(`[${MODULE_ID}] _onEditAction - node:`, this.node);
     console.log(`[${MODULE_ID}] _onEditAction - node.domainCardUuid:`, this.node?.domainCardUuid);
+    console.log(`[${MODULE_ID}] _onEditAction - cardData.name:`, this.cardData?.name);
     
     // Se não temos currentItem mas temos domainCardUuid, tentar carregar o item
     if (!this.currentItem && this.node?.domainCardUuid) {
@@ -736,18 +738,145 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
       // Não temos currentItem - tentar carregar novamente antes de desistir
       console.warn(`[${MODULE_ID}] _onEditAction - Não temos currentItem. Tentando carregar novamente...`);
       
-      // Tentar carregar do domainCardUuid novamente
+      // PRIORIDADE 1: Tentar carregar do domainCardUuid
       if (this.node?.domainCardUuid) {
         try {
           const item = await foundry.utils.fromUuid(this.node.domainCardUuid);
           if (item && this.actor.items.has(item.id)) {
             this.currentItem = this.actor.items.get(item.id);
-            console.log(`[${MODULE_ID}] _onEditAction - currentItem carregado novamente:`, this.currentItem);
+            console.log(`[${MODULE_ID}] _onEditAction - currentItem carregado do domainCardUuid:`, this.currentItem.id);
             // Tentar novamente com o currentItem carregado
             return this._onEditAction(actionId);
           }
         } catch (error) {
-          console.warn(`[${MODULE_ID}] _onEditAction - Erro ao carregar item:`, error);
+          console.warn(`[${MODULE_ID}] _onEditAction - Erro ao carregar item do domainCardUuid:`, error);
+        }
+      }
+      
+      // PRIORIDADE 2: Tentar encontrar pelo nome da carta
+      if (this.cardData?.name) {
+        console.log(`[${MODULE_ID}] _onEditAction - Tentando encontrar item pelo nome:`, this.cardData.name);
+        const item = this.actor.items.find(i => i.type === "domainCard" && i.name === this.cardData.name);
+        console.log(`[${MODULE_ID}] _onEditAction - Item encontrado pelo nome:`, item);
+        if (item) {
+          this.currentItem = item;
+          this.cardData = item;
+          console.log(`[${MODULE_ID}] _onEditAction - currentItem encontrado pelo nome:`, this.currentItem.id);
+          // Tentar novamente com o currentItem carregado
+          return this._onEditAction(actionId);
+        } else {
+          console.warn(`[${MODULE_ID}] _onEditAction - Nenhum item encontrado com o nome:`, this.cardData.name);
+          console.log(`[${MODULE_ID}] _onEditAction - Itens disponíveis no actor:`, this.actor.items.map(i => ({ id: i.id, name: i.name, type: i.type })));
+          
+          // Se temos node.domainCardData mas não temos item no personagem, a carta está salva apenas no nó
+          // Nesse caso, precisamos criar o item temporariamente ou avisar que precisa desbloquear o nó
+          if (this.node?.domainCardData && this.talentTreeApp) {
+            const talentTreeData = this.talentTreeApp.getTalentTreeData();
+            const isNodeUnlocked = talentTreeData.unlockedNodes.includes(this.node.id);
+            
+            console.log(`[${MODULE_ID}] _onEditAction - Verificando nó:`, {
+              nodeId: this.node.id,
+              isNodeUnlocked: isNodeUnlocked,
+              hasDomainCardData: !!this.node.domainCardData,
+              domainCardUuid: this.node.domainCardUuid
+            });
+            
+            // Permitir editar actions mesmo se o nó não estiver desbloqueado
+            // Criar o item temporariamente apenas para edição
+            if (!isNodeUnlocked) {
+              console.log(`[${MODULE_ID}] _onEditAction - Nó não está desbloqueado, mas criando item temporariamente para edição...`);
+            }
+            
+            // Criar o item a partir do domainCardData (mesmo se o nó não estiver desbloqueado)
+            // Isso permite editar actions mesmo quando o nó não está desbloqueado
+            try {
+                console.log(`[${MODULE_ID}] _onEditAction - Criando item a partir do domainCardData...`);
+                const itemData = foundry.utils.deepClone(this.node.domainCardData);
+                itemData.name = this.node.domainCardName || this.cardData.name;
+                itemData.img = this.node.domainCardImg || this.cardData.img;
+                
+                // Garantir que o tipo está correto
+                if (!itemData.type) {
+                  itemData.type = "domainCard";
+                }
+                
+                // Garantir que o system.domain está correto (usar o domainId se disponível)
+                if (!itemData.system) {
+                  itemData.system = {};
+                }
+                if (!itemData.system.domain && this.domainId) {
+                  itemData.system.domain = this.domainId;
+                }
+                
+                // IMPORTANTE: Quando criamos o item temporariamente para edição (nó não desbloqueado),
+                // NÃO adicionar ao loadout nem ao vault. O item só deve aparecer quando o nó for desbloqueado.
+                // Usar uma flag customizada para marcar que é temporário e filtrar depois
+                if (!isNodeUnlocked) {
+                  // Marcar como temporário usando uma flag customizada
+                  if (!itemData.flags) {
+                    itemData.flags = {};
+                  }
+                  if (!itemData.flags[MODULE_ID]) {
+                    itemData.flags[MODULE_ID] = {};
+                  }
+                  itemData.flags[MODULE_ID].isTemporaryForEditing = true;
+                  // Definir inVault como true para que não apareça no loadout
+                  // Mas vamos filtrar esses itens temporários para que não apareçam no vault também
+                  itemData.system.inVault = true;
+                  console.log(`[${MODULE_ID}] _onEditAction - Item será criado como temporário (não vai para loadout nem vault)`);
+                }
+                
+                console.log(`[${MODULE_ID}] _onEditAction - ItemData para criar:`, {
+                  name: itemData.name,
+                  type: itemData.type,
+                  domain: itemData.system?.domain,
+                  inVault: itemData.system?.inVault,
+                  hasActions: !!itemData.system?.actions,
+                  actionsCount: itemData.system?.actions ? Object.keys(itemData.system.actions).length : 0
+                });
+                
+                const createdItems = await Item.create([itemData], { parent: this.actor });
+                const createdItem = createdItems[0];
+                if (createdItem) {
+                  // Verificar se a flag foi salva corretamente
+                  const hasFlag = createdItem.flags?.[MODULE_ID]?.isTemporaryForEditing;
+                  console.log(`[${MODULE_ID}] _onEditAction - Item criado:`, {
+                    id: createdItem.id,
+                    name: createdItem.name,
+                    hasTemporaryFlag: hasFlag,
+                    flags: createdItem.flags
+                  });
+                  
+                  this.currentItem = createdItem;
+                  this.cardData = createdItem;
+                  // Associar ao nó
+                  await this._associateCardToNode(createdItem);
+                  console.log(`[${MODULE_ID}] _onEditAction - Item criado a partir do domainCardData:`, this.currentItem.id);
+                  // Tentar novamente com o currentItem carregado
+                  return this._onEditAction(actionId);
+                } else {
+                  console.error(`[${MODULE_ID}] _onEditAction - Item não foi criado`);
+                  ui.notifications.error("Não foi possível criar o item no personagem.");
+                  return;
+                }
+              } catch (error) {
+                console.error(`[${MODULE_ID}] _onEditAction - Erro ao criar item:`, error);
+                ui.notifications.error(`Erro ao criar item: ${error.message}`);
+                return;
+              }
+            }
+          }
+        }
+      
+      // PRIORIDADE 3: Tentar encontrar pelo cardData.id se existir
+      if (this.cardData?.id) {
+        const item = this.actor.items.get(this.cardData.id);
+        if (item) {
+          this.currentItem = item;
+          this.cardData = item;
+          console.log(`[${MODULE_ID}] _onEditAction - currentItem encontrado pelo id:`, this.currentItem.id);
+          // Tentar novamente com o currentItem carregado
+          return this._onEditAction(actionId);
         }
       }
       
@@ -1597,13 +1726,31 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
           await existingItem.update(updateData);
           
           // Atualizar currentItem após salvar para garantir que está sincronizado
-          this.currentItem = existingItem;
-          this.cardData = existingItem;
+          // Recarregar o item do actor para garantir que está atualizado
+          const updatedItem = this.actor.items.get(existingItem.id);
+          if (updatedItem) {
+            this.currentItem = updatedItem;
+            this.cardData = updatedItem;
+            console.log(`[${MODULE_ID}] _onSave - currentItem atualizado após salvar:`, this.currentItem.id);
+          } else {
+            this.currentItem = existingItem;
+            this.cardData = existingItem;
+          }
           
           // Se estamos editando a partir de um nó, atualizar a associação com os dados atualizados
           if (this.node && this.domainId && this.talentTreeApp && existingItem) {
             // Passar a descrição diretamente para garantir que usamos o valor atualizado
             await this._associateCardToNode(existingItem, description);
+            // Atualizar node após associar
+            const talentTreeData = this.talentTreeApp.getTalentTreeData();
+            const domain = talentTreeData.domains.find(d => d.id === this.domainId);
+            if (domain) {
+              const nodeToUpdate = domain.nodes.find(n => n.id === this.node.id);
+              if (nodeToUpdate) {
+                this.node = nodeToUpdate;
+                console.log(`[${MODULE_ID}] _onSave - node atualizado após associar:`, this.node.domainCardUuid);
+              }
+            }
           }
           
           ui.notifications.info(

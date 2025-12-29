@@ -17,6 +17,95 @@ Hooks.once("init", () => {
 Hooks.once("ready", async () => {
   // Registrar hooks para abrir a árvore de talentos
   registerTalentTreeHooks();
+  
+  // Patch do getter domainCards para filtrar itens temporários
+  // Itens marcados como temporários (para edição quando nó não está desbloqueado) não devem aparecer
+  // Usar libWrapper se disponível, senão usar defineProperty diretamente
+  const applyDomainCardsPatch = () => {
+    // Tentar encontrar o CharacterDataModel através do sistema
+    const systemId = game.system.id;
+    let CharacterDataModel = null;
+    
+    // Tentar diferentes caminhos
+    if (game.system.api?.data?.actors?.DhCharacter) {
+      CharacterDataModel = game.system.api.data.actors.DhCharacter;
+    } else if (CONFIG?.Actor?.dataModels?.character) {
+      CharacterDataModel = CONFIG.Actor.dataModels.character;
+    } else {
+      // Tentar importar diretamente
+      try {
+        const systemModule = game.modules.get(systemId);
+        if (systemModule?.api?.data?.actors?.DhCharacter) {
+          CharacterDataModel = systemModule.api.data.actors.DhCharacter;
+        }
+      } catch (e) {
+        console.warn(`[${MODULE_ID}] Erro ao tentar encontrar CharacterDataModel:`, e);
+      }
+    }
+    
+    if (!CharacterDataModel || !CharacterDataModel.prototype) {
+      console.warn(`[${MODULE_ID}] CharacterDataModel não encontrado. Tentando abordagem alternativa...`);
+      // Tentar abordagem alternativa: interceptar através do Actor
+      Hooks.on("preUpdateActor", (actor, updateData, options, userId) => {
+        if (actor.type === "character" && actor.system?.domainCards) {
+          // Não fazer nada aqui, apenas garantir que o hook está ativo
+        }
+      });
+      return;
+    }
+    
+    // Obter o descriptor original
+    const descriptor = Object.getOwnPropertyDescriptor(CharacterDataModel.prototype, 'domainCards');
+    if (!descriptor || !descriptor.get) {
+      console.warn(`[${MODULE_ID}] Não foi possível obter o getter original de domainCards`);
+      return;
+    }
+    
+    const originalGetter = descriptor.get;
+    
+    // Redefinir o getter com filtro
+    Object.defineProperty(CharacterDataModel.prototype, 'domainCards', {
+      get: function() {
+        const result = originalGetter.call(this);
+        
+        // Filtrar itens temporários do loadout e vault
+        const filterTemporary = (cards) => {
+          if (!Array.isArray(cards)) return cards;
+          return cards.filter(card => {
+            const isTemporary = card?.flags?.[MODULE_ID]?.isTemporaryForEditing;
+            if (isTemporary) {
+              console.log(`[${MODULE_ID}] Filtrando item temporário do vault/loadout:`, card.name, card.id);
+            }
+            return !isTemporary;
+          });
+        };
+        
+        if (result && typeof result === 'object') {
+          if (Array.isArray(result.loadout)) {
+            result.loadout = filterTemporary(result.loadout);
+          }
+          if (Array.isArray(result.vault)) {
+            result.vault = filterTemporary(result.vault);
+          }
+          if (Array.isArray(result.total)) {
+            result.total = filterTemporary(result.total);
+          }
+        }
+        
+        return result;
+      },
+      configurable: true,
+      enumerable: true
+    });
+    
+    console.log(`[${MODULE_ID}] Patch aplicado ao getter domainCards para filtrar itens temporários`);
+  };
+  
+  // Aplicar o patch
+  applyDomainCardsPatch();
+  
+  // O patch do getter domainCards já filtra os itens temporários automaticamente
+  // Não precisamos de hooks adicionais que tentam modificar domainCards diretamente
 });
 
 function registerTalentTreeHooks() {

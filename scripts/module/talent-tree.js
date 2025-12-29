@@ -1553,54 +1553,127 @@ export class TalentTreeApplication extends HandlebarsApplicationMixin(Applicatio
       // Desbloquear nó (adicionar à lista de desbloqueados)
       talentTreeData.unlockedNodes.push(nodeId);
       
-      // Se o nó tem dados de carta salvos mas ainda não tem item criado, criar agora
-      if (node.domainCardData && !node.domainCardUuid) {
+      // PRIMEIRO: Verificar se o domainCardUuid aponta para um item temporário e converter
+      if (node.domainCardUuid) {
         try {
-          // Criar uma cópia dos dados para não modificar o original
-          const itemData = foundry.utils.deepClone(node.domainCardData);
+          const item = await foundry.utils.fromUuid(node.domainCardUuid);
+          if (item && item.flags?.[MODULE_ID]?.isTemporaryForEditing) {
+            console.log(`[${MODULE_ID}] _onToggleNode - domainCardUuid aponta para item temporário, convertendo:`, item.id);
+            
+            // Atualizar o item removendo a flag temporária e ajustando inVault
+            await item.update({
+              [`flags.${MODULE_ID}.isTemporaryForEditing`]: null,
+              "system.inVault": false  // Permitir que apareça no loadout/vault
+            });
+            
+            // Limpar dados temporários do nó
+            delete node.domainCardData;
+            delete node.domainCardName;
+            delete node.domainCardImg;
+            delete node.domainCardDescription;
+            
+            ui.notifications.info(`Carta "${node.label}" adicionada ao personagem!`);
+          }
+        } catch (e) {
+          // UUID inválido ou item não encontrado, continuar
+          console.warn(`[${MODULE_ID}] _onToggleNode - Erro ao verificar item por UUID:`, e);
+        }
+      }
+      
+      // SEGUNDO: Se o nó tem dados de carta salvos mas ainda não tem item criado, criar agora
+      if (node.domainCardData && !node.domainCardUuid) {
+        // Caso 1: Tem domainCardData mas não tem item criado - precisa criar
+        try {
+          // PRIMEIRO: Verificar se já existe um item temporário criado para edição
+          let existingTemporaryItem = null;
           
-          // IMPORTANTE: Garantir que a descrição seja preservada
-          // Se há uma descrição salva separadamente no nó, usar ela (é a mais recente)
-          if (node.domainCardDescription !== undefined) {
-            // A descrição pode ser string ou HTMLField (objeto com value)
-            if (itemData.system && itemData.system.description) {
-              // Se description é um objeto HTMLField, atualizar apenas o value
-              if (typeof itemData.system.description === "object" && itemData.system.description.value !== undefined) {
-                itemData.system.description.value = node.domainCardDescription;
-              } else {
-                // Se é string direto, substituir
-                itemData.system.description = node.domainCardDescription;
-              }
-            } else {
-              // Se não existe description no system, criar
-              if (!itemData.system) {
-                itemData.system = {};
-              }
-              itemData.system.description = node.domainCardDescription;
+          // Procurar por itens temporários que correspondam a este nó
+          for (const item of this.actor.items) {
+            if (item.type === "domainCard" && 
+                item.flags?.[MODULE_ID]?.isTemporaryForEditing &&
+                item.name === (node.domainCardName || node.label)) {
+              existingTemporaryItem = item;
+              console.log(`[${MODULE_ID}] _onToggleNode - Item temporário encontrado pelo nome:`, item.id);
+              break;
             }
           }
           
-          // Garantir que nome e imagem também estejam atualizados (caso tenham sido modificados)
-          if (node.domainCardName) {
-            itemData.name = node.domainCardName;
+          if (existingTemporaryItem) {
+            // Item temporário já existe - converter em item normal removendo a flag
+            console.log(`[${MODULE_ID}] _onToggleNode - Convertendo item temporário em item normal:`, existingTemporaryItem.id);
+            
+            // Atualizar o item removendo a flag temporária e ajustando inVault
+            await existingTemporaryItem.update({
+              [`flags.${MODULE_ID}.isTemporaryForEditing`]: null,
+              "system.inVault": false  // Permitir que apareça no loadout/vault
+            });
+            
+            // Associar o UUID do item existente ao nó
+            node.domainCardUuid = existingTemporaryItem.uuid;
+            
+            // Limpar dados temporários do nó
+            delete node.domainCardData;
+            delete node.domainCardName;
+            delete node.domainCardImg;
+            delete node.domainCardDescription;
+            
+            ui.notifications.info(`Carta "${node.label}" adicionada ao personagem!`);
+          } else {
+            // Não há item temporário - criar novo item normalmente
+            // Criar uma cópia dos dados para não modificar o original
+            const itemData = foundry.utils.deepClone(node.domainCardData);
+            
+            // IMPORTANTE: Garantir que a descrição seja preservada
+            // Se há uma descrição salva separadamente no nó, usar ela (é a mais recente)
+            if (node.domainCardDescription !== undefined) {
+              // A descrição pode ser string ou HTMLField (objeto com value)
+              if (itemData.system && itemData.system.description) {
+                // Se description é um objeto HTMLField, atualizar apenas o value
+                if (typeof itemData.system.description === "object" && itemData.system.description.value !== undefined) {
+                  itemData.system.description.value = node.domainCardDescription;
+                } else {
+                  // Se é string direto, substituir
+                  itemData.system.description = node.domainCardDescription;
+                }
+              } else {
+                // Se não existe description no system, criar
+                if (!itemData.system) {
+                  itemData.system = {};
+                }
+                itemData.system.description = node.domainCardDescription;
+              }
+            }
+            
+            // Garantir que nome e imagem também estejam atualizados (caso tenham sido modificados)
+            if (node.domainCardName) {
+              itemData.name = node.domainCardName;
+            }
+            if (node.domainCardImg) {
+              itemData.img = node.domainCardImg;
+            }
+            
+            // Garantir que não seja criado como temporário
+            if (itemData.flags?.[MODULE_ID]?.isTemporaryForEditing) {
+              delete itemData.flags[MODULE_ID].isTemporaryForEditing;
+            }
+            if (itemData.system?.inVault === true) {
+              itemData.system.inVault = false;
+            }
+            
+            const createdItems = await Item.create([itemData], { parent: this.actor });
+            const createdItem = createdItems[0];
+            
+            // Associar o UUID do item criado ao nó
+            node.domainCardUuid = createdItem.uuid;
+            
+            // Limpar dados temporários
+            delete node.domainCardData;
+            delete node.domainCardName;
+            delete node.domainCardImg;
+            delete node.domainCardDescription;
+            
+            ui.notifications.info(`Carta "${node.label}" adicionada ao personagem!`);
           }
-          if (node.domainCardImg) {
-            itemData.img = node.domainCardImg;
-          }
-          
-          const createdItems = await Item.create([itemData], { parent: this.actor });
-          const createdItem = createdItems[0];
-          
-          // Associar o UUID do item criado ao nó
-          node.domainCardUuid = createdItem.uuid;
-          
-          // Limpar dados temporários
-          delete node.domainCardData;
-          delete node.domainCardName;
-          delete node.domainCardImg;
-          delete node.domainCardDescription;
-          
-          ui.notifications.info(`Carta "${node.label}" adicionada ao personagem!`);
         } catch (error) {
           ui.notifications.error(`Erro ao adicionar carta ao personagem: ${error.message}`);
         }
