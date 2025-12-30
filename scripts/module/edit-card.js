@@ -361,6 +361,32 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
 
     // Listener de upload de arquivo removido - apenas edição via URL
 
+    // Listener para formatação automática da descrição
+    const $descriptionTextarea = $element.find("#card-description");
+    if ($descriptionTextarea.length) {
+      // Formatar ao sair do campo (blur)
+      $descriptionTextarea.off("blur").on("blur", (e) => {
+        const originalValue = $(e.target).val();
+        const formattedValue = this._formatDescription(originalValue);
+        if (formattedValue !== originalValue) {
+          $(e.target).val(formattedValue);
+          // Mostrar notificação discreta
+          ui.notifications.info("Descrição formatada automaticamente", { permanent: false });
+        }
+      });
+
+      // Formatar ao pressionar Ctrl+Enter (atalho)
+      $descriptionTextarea.off("keydown").on("keydown", (e) => {
+        if (e.ctrlKey && e.key === "Enter") {
+          e.preventDefault();
+          const originalValue = $(e.target).val();
+          const formattedValue = this._formatDescription(originalValue);
+          $(e.target).val(formattedValue);
+          ui.notifications.info("Descrição formatada", { permanent: false });
+        }
+      });
+    }
+
     // Listener para clicar na imagem e reabrir o Compendium Browser
     // Usar mousedown/mouseup para detectar clique simples sem interferir com drag
     let mouseDownTime = 0;
@@ -1252,7 +1278,15 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
     // IMPORTANTE: Pegar descrição do textarea diretamente via jQuery para garantir que pegamos o valor correto
     // O FormData pode não capturar corretamente o conteúdo do textarea em alguns casos
     const descriptionTextarea = $element.find("#card-description");
-    const description = descriptionTextarea.val() || "";
+    let description = descriptionTextarea.val() || "";
+    
+    // Formatar a descrição automaticamente antes de salvar
+    description = this._formatDescription(description);
+    
+    // Atualizar o textarea com a versão formatada (para feedback visual)
+    if (description !== descriptionTextarea.val()) {
+      descriptionTextarea.val(description);
+    }
     
     // Pegar recallCost do formulário
     const recallCost = parseInt($element.find("#card-recall-cost").val()) || 0;
@@ -1766,6 +1800,120 @@ export class EditCardApplication extends HandlebarsApplicationMixin(ApplicationV
         game.i18n.format(`${MODULE_ID}.edit-card.save-error`, { error: error.message })
       );
     }
+  }
+
+  /**
+   * Formata automaticamente o texto da descrição para deixá-lo organizado e bonito
+   * @param {string} text - Texto a ser formatado
+   * @returns {string} - Texto formatado
+   */
+  _formatDescription(text) {
+    if (!text || typeof text !== 'string') return text;
+
+    let formatted = text;
+
+    // 1. Remover espaços extras no início e fim
+    formatted = formatted.trim();
+    if (!formatted) return '';
+
+    // 2. Se o texto contém HTML, processar de forma especial
+    const hasHTML = /<[a-z][\s\S]*>/i.test(formatted);
+    
+    if (hasHTML) {
+      // Normalizar quebras de linha em HTML
+      formatted = formatted.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      
+      // Garantir que vírgulas tenham espaço após elas (padronizar)
+      formatted = formatted.replace(/,\s*/g, ', ');
+      
+      // Remover espaços extras entre tags (mas manter quebras de linha para legibilidade)
+      formatted = formatted.replace(/>\s+</g, '>\n<');
+      
+      // Adicionar quebra de linha após tags de fechamento de parágrafo para melhor legibilidade
+      formatted = formatted.replace(/<\/p>/g, '</p>\n');
+      
+      // Remover espaços extras no início e fim de cada linha (mas preservar estrutura HTML)
+      formatted = formatted.split('\n').map(line => {
+        // Não remover espaços dentro de tags
+        if (line.trim().startsWith('<') && line.trim().endsWith('>')) {
+          return line.trim();
+        }
+        return line.trim();
+      }).join('\n');
+      
+      // Remover múltiplas quebras de linha consecutivas (máximo 2)
+      formatted = formatted.replace(/\n{3,}/g, '\n\n');
+      
+      // Remover espaços extras no início e fim novamente
+      formatted = formatted.trim();
+      
+      return formatted;
+    }
+
+    // 3. Normalizar quebras de linha (Windows, Mac, Linux)
+    formatted = formatted.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    // 4. Remover espaços extras no início e fim de cada linha
+    formatted = formatted.split('\n').map(line => line.trim()).join('\n');
+
+    // 5. Remover espaços após vírgulas
+    // Garantir que vírgulas tenham espaço após elas (padronizar)
+    formatted = formatted.replace(/,\s*/g, ', ');
+
+    // 6. Remover espaços extras entre palavras (máximo 1 espaço)
+    formatted = formatted.replace(/[ \t]{2,}/g, ' ');
+
+    // 5. Remover linhas vazias duplicadas (máximo 2 linhas vazias consecutivas)
+    formatted = formatted.replace(/\n{3,}/g, '\n\n');
+
+    // 6. Organizar parágrafos e listas
+    const lines = formatted.split('\n');
+    const organizedLines = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const nextLine = lines[i + 1];
+      const prevLine = organizedLines[organizedLines.length - 1];
+      
+      // Pular linhas vazias duplicadas
+      if (line === '' && prevLine === '') {
+        continue;
+      }
+
+      // Verificar se é um item de lista (começa com -, *, •, ou número seguido de ponto/espaço)
+      const isListItem = /^[-*•]\s+|^\d+[\.\)]\s+/i.test(line);
+      const prevIsListItem = prevLine && /^[-*•]\s+|^\d+[\.\)]\s+/i.test(prevLine);
+      const nextIsListItem = nextLine && /^[-*•]\s+|^\d+[\.\)]\s+/i.test(nextLine);
+
+      // Se é um item de lista e o anterior não era lista, adicionar linha vazia antes
+      if (isListItem && prevLine && prevLine !== '' && !prevIsListItem) {
+        organizedLines.push('');
+      }
+
+      organizedLines.push(line);
+
+      // Se não é item de lista e não está vazia, e a próxima linha também não é lista e não está vazia,
+      // adicionar linha vazia depois (separar parágrafos)
+      if (!isListItem && line !== '' && nextLine && nextLine !== '' && !nextIsListItem) {
+        organizedLines.push('');
+      }
+    }
+
+    formatted = organizedLines.join('\n');
+
+    // 7. Remover linhas vazias no início e fim
+    formatted = formatted.replace(/^\n+|\n+$/g, '');
+
+    // 8. Garantir que listas tenham espaçamento adequado antes
+    formatted = formatted.replace(/([^\n])\n([-*•]\s+|\d+[\.\)]\s+)/g, '$1\n\n$2');
+
+    // 9. Limpar novamente linhas vazias duplicadas
+    formatted = formatted.replace(/\n{3,}/g, '\n\n');
+
+    // 10. Remover espaços extras no início e fim novamente
+    formatted = formatted.trim();
+
+    return formatted;
   }
 
   async _associateCardToNode(item, descriptionOverride = null) {
